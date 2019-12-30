@@ -1,0 +1,50 @@
+Bootstrap: debootstrap
+MirrorURL: http://archive.ubuntu.com/ubuntu/
+OSVersion: bionic
+Include: software-properties-common
+%post
+
+	# --- Installation of pre-requisite packages ---
+	apt-get update -y 
+	apt-get install -y wget vim apt-utils
+
+	# Bind through IDIA volumes to the container
+	mkdir /users /scratch /data /idia
+
+	# Add repositories
+	apt-get install software-properties-common
+	apt-add-repository -s ppa:kernsuite/kern-5
+	apt-add-repository multiverse
+	apt-add-repository restricted
+	apt-get update -y
+
+	# python 3 stuff
+	apt-get install -y python3-pip
+	apt-get install -y casacore-dev python-numpy python-setuptools libboost-python-dev libcfitsio-dev wcslib-dev
+
+	pip3 install python-casacore
+	pip3 install dask-ms[xarray]
+	pip3 install astropy	
+	
+	pip3 install numpy scipy matplotlib ipython pandas sympy nose
+	
+	pip3 install Bottleneck
+	pip3 install "dask[complete]"
+
+	# GraphViz For making DAG graphs in Dask, etc.
+	apt-get install graphviz
+	pip3 install graphviz
+
+	pip3 install --upgrade psutil
+	pip3 install xhistogram
+# 	pip3 install -e benchmark/
+
+
+%environment
+	export LC_ALL=C
+	export LC_CTYPE="en_US.UTF-8"
+	unset XDG_RUNTIME_DIR
+	
+%runscript
+	#!/bin/sh
+	/usr/bin/python "$@"
