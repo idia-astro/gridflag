@@ -1,0 +1,5 @@
+dask-ms[xarray]>=0.2.3
+click>=7.0
+numpy>=1.17
+dask[array]
+scipy>=1.4
