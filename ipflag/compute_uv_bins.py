@@ -13,23 +13,33 @@ import dask.array as da
 import xarray as xr
 from daskms import xds_from_table, xds_from_ms
 
+import listobs_daskms as listobs
 
-def load_ms_file(msfile, attributes=False, chunksize:int=10**7):
+
+def load_ms_file(msfile, fieldid, ddid=0, chunksize:int=10**7):
     """
     Load selected data from the measurement set (MS) file and convert 
-    to xarray DataArrays.
+    to xarray DataArrays. Transform data for analysis. 
 
     Parameters
     ----------
-    msfile: string
+    msfile : string
         Location of the MS file.
+    fieldid : int
+        The unique identifier for the field that is to be analyzed 
+        (FIELD_ID in a Measurement Set). This information can be 
+        retreived using the 'listobs_daskms' class.
+    ddid : int
+        The unique identifier for the data description id. Default is
+        zero.
+    chunksize : int
+        Size of chunks to be used with Dask.
     
     Returns
     -------
-    da_vis: xarray.DataArray
-        The contents of the main table of the MS without metadata.
-    ds_spw: xarray.DataSet
-        The contents of the SPECTRAL_WINDOW table of the MS.
+    ds_ind: xarray.Dataset
+        The contents of the main table of the MS columns DATA and UVW
+        flattened and scaled by wavelength.
 
     Returns
     -------
@@ -40,14 +50,28 @@ def load_ms_file(msfile, attributes=False, chunksize:int=10**7):
     """
 
     # Load Data from MS
-    ds = xds_from_ms(msfile, table_keywords=True, column_keywords=True, group_cols=['DATA_DESC_ID'])
+
+    if fieldid==None:
+        listobs(msfile)
+        return
+
+###     ds = xds_from_ms(msfile, table_keywords=True, column_keywords=True, group_cols=['DATA_DESC_ID'])
+    ms = xds_from_ms(msfile, columns=['DATA', 'UVW'], group_cols=['FIELD_ID'], table_keywords=True, column_keywords=True)
 
     # Split the dataset and attributes
-    ds_, attr_ = ds[0][0], ds[1:]
+#     ds_, attr_ = ds[0][0], ds[1:]
+    ds_ms, ms_attrs = ms[0][fieldid], ms[1:]
 
-    da_vis = ds_.DATA
-    ds_spw = xds_from_table(f'{msfile}SPECTRAL_WINDOW', column_keywords=True)
-    ds_spw = ds_spw[0][0]
+    # Get spectral window table information
+    spw_table_name = 'SPECTRAL_WINDOW'
+    spw_col = 'CHAN_FREQ'
+    
+    da_vis = ds_ms.DATA
+    spw = xds_from_table(f'{msfile}/{spw_table_name}', columns=['NUM_CHAN', spw_col], column_keywords=True)
+    ds_spw, spw_attrs = spw[0][ddid], spw[1]
+
+    col_units = spw_attrs['CHAN_FREQ']['QuantumUnits'][0]    
+    print(f"Selected column {spw_col} from {spw_table_name} with units {col_units}")
     
     # Create UV values scaled using spectral window frequencies
     nchan = int(ds_spw.NUM_CHAN.data.compute()[0])
@@ -58,7 +82,7 @@ def load_ms_file(msfile, attributes=False, chunksize:int=10**7):
     chan_wavelength = chan_wavelength.squeeze()
     chan_wavelength = xr.DataArray(chan_wavelength.data, dims=['chan'])
 
-    uvw_chan = xr.concat([ds_.UVW[:,0] / chan_wavelength, ds_.UVW[:,1] / chan_wavelength, ds_.UVW[:,2] / chan_wavelength], 'uvw')
+    uvw_chan = xr.concat([ds_ms.UVW[:,0] / chan_wavelength, ds_ms.UVW[:,1] / chan_wavelength, ds_ms.UVW[:,2] / chan_wavelength], 'uvw')
     uvw_chan = uvw_chan.transpose('row', 'chan', 'uvw')  
     
     # Compute UV bins
@@ -95,5 +119,4 @@ def load_ms_file(msfile, attributes=False, chunksize:int=10**7):
     ds_ind = ds_ind.chunk({'corr': 4, 'uvw': 2, 'newrow': chunksize})
     ds_ind = ds_ind.unify_chunks()
 
-    return ds_ind
-
+    return ds_ind, uvbins
