@@ -55,7 +55,8 @@ class ListObs:
 
     def __init__(self, filename):
         self.filename = filename
-        self.ms = xds_from_ms(filename, table_keywords=True, column_keywords=True, group_cols=["DATA_DESC_ID"])
+        self.ms = xds_from_ms(filename, columns=['DATA', 'TIME', 'OBSERVATION_ID', 'ARRAY_ID'], group_cols=["DATA_DESC_ID"], table_keywords=True, column_keywords=True)
+        #self.ms = xds_from_ms(filename, table_keywords=True, column_keywords=True, group_cols=["DATA_DESC_ID"]) # Changed to above for split-by-spw data
 
         self.ds_ms = self.ms[0]
         self.table_attr = self.ms[1]
@@ -66,7 +67,10 @@ class ListObs:
         self.pol = xds_from_table(f"{filename}/POLARIZATION",  table_keywords=True, column_keywords=True)
         self.fields = xds_from_table(f"{filename}/FIELD", column_keywords=True)
         self.state = xds_from_table(f"{filename}/STATE",  table_keywords=True, column_keywords=True)
-        self.sources = xds_from_table(f"{filename}/SOURCE", group_cols=['__row__'], columns=['SOURCE_ID', 'NAME', 'SPECTRAL_WINDOW_ID', 'REST_FREQUENCY', 'SYSVEL'])
+        try:
+            self.sources = xds_from_table(f"{filename}/SOURCE", group_cols=['__row__'], columns=['SOURCE_ID', 'NAME', 'SPECTRAL_WINDOW_ID', 'REST_FREQUENCY', 'SYSVEL'])
+        except:
+            self.sources = xds_from_table(f"{filename}/SOURCE", group_cols=['__row__'], columns=['SOURCE_ID', 'NAME', 'SPECTRAL_WINDOW_ID'])
 
         self.ds_pol = self.pol[0]
         self.ds_spw = self.spw[0]
@@ -150,7 +154,7 @@ class ListObs:
             return (nrows, exposetimes, obstimes, timerefs)
     
     def get_scan_list(self, verbose=True):
-        scans = xds_from_ms(self.filename, group_cols=['SCAN_NUMBER', "FIELD_ID", "DATA_DESC_ID"], index_cols=["SCAN_NUMBER", "TIME"])   
+        scans = xds_from_ms(self.filename, group_cols=['SCAN_NUMBER', "FIELD_ID"], index_cols=["SCAN_NUMBER", "TIME"])   
         scan_list = []
         for scan in scans:
             scan_dict = {}
@@ -248,10 +252,13 @@ class ListObs:
         print("  SpwID  Name   #Chans   Frame   Ch0(MHz)  ChanWid(kHz)  TotBW(kHz) CtrFreq(MHz)  Corrs")
 
         spw_attrs = []
+
+        dd_spw_id = self.dd[0].SPECTRAL_WINDOW_ID.data.compute()
+        dd_pol_id = self.dd[0].POLARIZATION_ID.data.compute()
                   
         for msds in self.ds_ms:
             ddid = msds.attrs['DATA_DESC_ID']
-            spw_id = self.dd[ddid].SPECTRAL_WINDOW_ID.data.compute()[0]
+            spw_id = dd_spw_id[ddid]
             spw_frame = self.spw[2]['CHAN_FREQ']['MEASINFO']['TabRefTypes'][self.ds_spw[spw_id].MEAS_FREQ_REF.data.compute()[0]]
                   
             spw_name = self.ds_spw[spw_id].NAME.data.compute()[0]
@@ -261,7 +268,7 @@ class ListObs:
             total_BW = self.ds_spw[spw_id].TOTAL_BANDWIDTH.data.compute()[0]/10**3
             ctrfreq = (self.ds_spw[spw_id].CHAN_FREQ.data.compute()[0][0] + (self.ds_spw[spw_id].CHAN_FREQ.data.compute()[0][-1] - self.ds_spw[spw_id].CHAN_FREQ.data.compute()[0][0])/2)/10**6
 
-            pol_id = self.dd[ddid].POLARIZATION_ID.data.compute()[0]
+            pol_id = dd_pol_id[ddid]
             corr_type = self.ds_pol[pol_id].CORR_TYPE.data.compute()[0]
             corr_type = [StokesTypes[i] for i in corr_type]
 
@@ -278,10 +285,14 @@ class ListObs:
         source_id = sources['data_vars']['SOURCE_ID']['data']
         names = sources['data_vars']['NAME']['data']
         spw_id = sources['data_vars']['SPECTRAL_WINDOW_ID']['data']
-        rest_freq = sources['data_vars']['REST_FREQUENCY']['data']
-        rest_freq = [r_[0] for r_ in rest_freq]
-        sysvel = sources['data_vars']['SYSVEL']['data']
-        sysvel = [r_[0] for r_ in sysvel]
+        try:
+            rest_freq = sources['data_vars']['REST_FREQUENCY']['data']
+            rest_freq = [r_[0] for r_ in rest_freq]
+            sysvel = sources['data_vars']['SYSVEL']['data']
+            sysvel = [r_[0] for r_ in sysvel]
+        except:
+            rest_freq = [0]*len(source_id)
+            sysvel = [0]*len(source_id)
 
         source_list = [{'id': source_id[i], 'name': names[i], 'spw_id': spw_id[i], 'rest_freq': rest_freq[i], 'sysvel': sysvel[i]} for i in range(0, len(source_id))]
         self.document['sources'] = source_list
