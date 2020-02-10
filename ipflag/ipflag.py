@@ -14,41 +14,45 @@ def main():
 
 @main.command(short_help='GRIDflag algorithm')
 @click.argument('ms', type=click.Path(exists=True))
-@click.argument('gridsize', type=int)
+@click.argument('field_id', type=int)
 @click.option('--uvrange', nargs=2, type=float, default=[None,None],
               help='Min and max UV range within which to flag (default:all)')
-@click.option('--corr', type=str,
-              help='Correlation to flag on (ex: "XX") (default: all)')
 @click.option('--nsigma', type=float, default=3.0,
         help='Sigma to use while determining outliers [default: 3]')
-def gridflag(ms, gridsize, nsigma, uvrange, corr):
+@click.option('--column', 'datacolumn', default='DATA',
+        help='Column on which to operate [default: DATA]')
+def gridflag(ms, field_id, nsigma, uvrange, datacolumn):
     """
-    Run the GRIDflag flagger on the input MS.
-
-    The gridsize parameter is given by the inverse of the maximum field of
-    view expressed in radians. If the field of view is 3 deg (~ 0.05 rad)
-    the gridsize is given by ~ 20 lambda.
+    Run the GRIDflag flagger on the input MS, over the specified FIELD_ID.
 
     The UV range to be specified determines the minimum and maximum
     UV lengths considered while flagging, anything outside this range is
     ignored.
+    """
 
-    By default the GRIDflag algorithm flags on all correlations independently,
-    successively on the real, imaginary and amplitudes of the visibilities. If
-    a correlation is specified via the --corr, only that correlation will be
-    operated upon.
+    _gridflag(ms, field_id, nsigma, uvrange, datacolumn)
+
+
+def _gridflag(ms, field_id, nsigma, uvrange, datacolumn):
+    """
+    The 'internal' layer of gridflag - so that it's accessible
+    via notebook/ipython without going through the click wrappers.
     """
 
     import dask.array as da
     import dask
-    #from ipflag.compute_uv_bins import load_ms_file
-    import compute_uv_bins
-    import groupby_apply
+
+    # Depending on how it was installed one or the other will work.
+    try:
+        import compute_uv_bins, groupby_apply
+    except ModuleNotFoundError:
+        from ipflag import compute_uv_bins
+        from ipflag import groupby_apply
 
     from dask.distributed import Client
     client = Client()
 
-    ds_ind = compute_uv_bins.load_ms_file(ms)
+    ds_ind = compute_uv_bins.load_ms_file(ms, field_id, datacolumn=datacolumn)
 
     # Get dask arrays of UV-bins and visibilities from XArray dataset
     dd_ubins = da.from_array(ds_ind.U_bins)
