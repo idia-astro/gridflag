@@ -13,12 +13,10 @@ __author__ = 'Joseph Bochenek'
 import numpy as np
 
 from astropy.time import Time
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import SkyCoord, EarthLocation
 from astropy import units as u
 
 from daskms import xds_from_table, xds_from_ms
-
-
 
 StokesTypes= ['Undefined', 'I', 'Q', 'U', 'V', 'RR', 'RL', 'LR', 'LL', 'XX', 'XY', 'YX', 'YY', 'RX', 'RY', 'LX', 'LY', 'XR', 'XL', 'YR', 'YL', 'PP', 'PQ', 'QP', 'QQ', 'RCircular', 'LCircular', 'Linear', 'Ptotal', 'Plinear', 'PFtotal', 'PFlinear', 'Pangle']
 
@@ -44,11 +42,15 @@ class ListObs:
     Load a measurement set (MS) file and get summary data or return properties for use in 
     other programs.
     
+    Parameters
+    ----------
+    filename : String
+        The path to a measurement set to be used by the class.
+    
     Example:
         myms = listobs(filename)
         myms.listobs()
         myfields = myms.get_summary()
-
     """
 
     def __init__(self, filename):
@@ -60,10 +62,12 @@ class ListObs:
         self.col_attr = self.ms[2]
 
         self.dd = xds_from_table(f"{filename}/DATA_DESCRIPTION")
-        self.spw = xds_from_table(f"{filename}SPECTRAL_WINDOW", group_cols="__row__", table_keywords=True, column_keywords=True)
-        self.pol = xds_from_table(f"{filename}POLARIZATION",  table_keywords=True, column_keywords=True)
+        self.spw = xds_from_table(f"{filename}/SPECTRAL_WINDOW", group_cols="__row__", table_keywords=True, column_keywords=True)
+        self.pol = xds_from_table(f"{filename}/POLARIZATION",  table_keywords=True, column_keywords=True)
         self.fields = xds_from_table(f"{filename}/FIELD", column_keywords=True)
-        self.state = xds_from_table(f"{filename}STATE",  table_keywords=True, column_keywords=True)
+        self.state = xds_from_table(f"{filename}/STATE",  table_keywords=True, column_keywords=True)
+        self.sources = xds_from_table(f"{filename}/SOURCE", group_cols=['__row__'], columns=['SOURCE_ID', 'NAME', 'SPECTRAL_WINDOW_ID', 'REST_FREQUENCY', 'SYSVEL'])
+
         self.ds_pol = self.pol[0]
         self.ds_spw = self.spw[0]
         self.ds_state = self.state[0][0]
@@ -71,7 +75,22 @@ class ListObs:
         self.dashlin2 = dashlin2 = '='*80
         self.document = {}
         
-    def get_summary(self):
+    def get_summary(self, return_data=False):
+        """ Print all metadata for the measurement sent to the standard output.
+        
+        Parameters
+        ----------
+        return_data : Boolean
+            If true then return a dictionary containing the metadata from all
+            the methods in the 
+        
+        Returns
+        -------
+        document : dictionary
+            A dictionary of lists, each list contains metadata returned by one 
+            method of the class.  The keys in the dictionary define the 
+            information in the dictionary.
+        """
         _ = self.get_ms_info()
         print(f"{self.dashlin2}\n           MeasurementSet Name:  {self.document['table_name']}      MS Version {self.document['ms_version']}\n{self.dashlin2}\n")
 
@@ -82,23 +101,17 @@ class ListObs:
         _ = self.get_main_table()
         print(f"Data records: {self.document['nrows']}       Total elapsed time = {self.document['exposetime']:.2f} seconds\n   Observed from   {self.document['obstime'][0][0]}/{self.document['obstime'][0][1]}   to   {self.document['obstime'][1][0]}/{self.document['obstime'][1][1]} ({self.document['timeref']})\n" )
         print(f"   ObservationID = {self.document['obsid']}         ArrayID = {self.document['arrid']}")
-        self.get_scan_list()
+        _ = self.get_scan_list()
 
         _ = self.get_fields()
-        fields_attrs = self.document['fields']
-        print(f"Fields: {len(fields_attrs)}")
-        print("  ID   Code Name                RA               Decl           Epoch   SrcId      nRows")
-        for field in fields_attrs:
-            print(f"  {field['ID']:<4} {field['Code']:<4} {field['Name']:<19} {field['RA']:<15} {field['Decl']:<15} {field['Epoch']:<7} {field['SrcId']:<10} {field['nRows']}")
 
-        self.get_spectral_window()
+        _ = self.get_spectral_window()
 
         _ = self.get_source_list()
-        print(f"Sources: {len(self.document['source_id'])}")
-        print("  ID   Name                SpwId RestFreq(MHz)  SysVel(km/s) ")
-        for i in range(len(self.document['source_id'])):
-            print(f"  {self.document['source_id'][i]:<4} {self.document['source_names'][i]:<19} {self.document['spw_id'][i]:<5} {self.document['rest_freq'][i]/10**6:<14.0f} {self.document['sysvel'][i]/10**3:<13}")
-                  
+
+        _ = self.get_antenna_list()    
+        if return_data:
+            return self.document
                   
     def get_ms_info(self):
         ms_version = self.table_attr['MS_VERSION']
@@ -136,29 +149,58 @@ class ListObs:
             self.document['arrid'] = arrid
             return (nrows, exposetimes, obstimes, timerefs)
     
-    def get_scan_list(self):
+    def get_scan_list(self, verbose=True):
         scans = xds_from_ms(self.filename, group_cols=['SCAN_NUMBER', "FIELD_ID", "DATA_DESC_ID"], index_cols=["SCAN_NUMBER", "TIME"])   
-        print("Date        Timerange (UTC)          Scan  FldId FieldName             nRows     SpwIds   Average Interval(s)    ScanIntent")
+        scan_list = []
         for scan in scans:
+            scan_dict = {}
             times_ = [float(scan.TIME[0].compute()), float(scan.TIME[-1].compute())]
             times = [Time(times_[0]/86400.0, format='mjd', scale='utc').datetime, Time(times_[-1]/86400.0, format='mjd', scale='utc').datetime]
-            times = [[times[0].strftime('%d-%b-%Y'), times[0].strftime('%H:%M:%S')], [times[1].strftime('%d-%b-%Y'), times[1].strftime('%H:%M:%S')]]
-            scan_id = scan.attrs['SCAN_NUMBER']
+            scan_dict['times'] = [[times[0].strftime('%d-%b-%Y'), times[0].strftime('%H:%M:%S')], [times[1].strftime('%d-%b-%Y'), times[1].strftime('%H:%M:%S')]]
+            scan_dict['scan_id'] = scan.attrs['SCAN_NUMBER']
             field_id = scan.attrs['FIELD_ID']
-            field_name = self.fields[0][0].to_dict()['data_vars']['NAME']['data'][field_id]
-            nrows = scan.row.count().to_dict()['data']
-            spwids = 0
-            interval = round(scan.INTERVAL.data.compute()[-1])
+            scan_dict['field_id'] = field_id
+            scan_dict['field_name'] = self.fields[0][0].to_dict()['data_vars']['NAME']['data'][field_id]
+            scan_dict['nrows'] = scan.row.count().to_dict()['data']
+            scan_dict['spwids'] = 0
+            scan_dict['interval'] = round(scan.INTERVAL.data.compute()[-1])
             state_id = scan.STATE_ID[0].to_dict()['data']
-            intent = self.ds_state.OBS_MODE.to_dict()['data'][state_id]
-            if scan_id == 1:
-                time_string = f"{times[0][0]}/{times[0][1]} - {times[1][1]}"
-            else:
-                time_string = f"{times[0][1]} - {times[1][1]}"
-            print(f"{time_string:>31}\t{scan_id:>9}{field_id:>7} {field_name:<22}{nrows:<10}{spwids:<9}{interval:<23}{intent:<10}")
-        print("           (nRows = Total number of rows per scan) ")
+            scan_dict['state_id'] = state_id
+            scan_dict['intent'] = ''
+            if state_id > -1:
+                scan_dict['intent'] = self.ds_state.OBS_MODE.to_dict()['data'][state_id]
+            scan_list.append(scan_dict)
+        
+        self.document['scan_list'] = scan_list
+        if verbose:
+            print("Date        Timerange (UTC)          Scan  FldId FieldName             nRows     SpwIds   Average Interval(s)    ScanIntent")
+            for scan in scan_list: 
+                times = scan['times']
+                if scan['scan_id'] == 1:
+                    time_string = f"{times[0][0]}/{times[0][1]} - {times[1][1]}"
+                else:
+                    time_string = f"{times[0][1]} - {times[1][1]}"
+                print(f"{time_string:>31}\t{scan['scan_id']:>9}{scan['field_id']:>7} {scan['field_name']:<22}{scan['nrows']:<10}{scan['spwids']:<9}{scan['interval']:<23}{scan['intent']:<10}")
+                  
+            print("           (nRows = Total number of rows per scan) ")
+        return scan_list
 
-    def get_fields(self):
+
+    def get_fields(self, verbose=True):
+        """ Get the metadata for the fields in the measurement set.
+        
+        Parameters
+        ----------
+        verbose : Boolean
+            If true then return a list of dicts, each one with metadata for one 
+            field.
+        
+        Returns
+        -------
+        antenna_list : list-like()
+            A list of dictionary objects, each dictionary contains metadata for
+            one field.
+        """
         fields_ = self.fields[0][0].compute()
         fields = fields_.to_dict()
 
@@ -191,9 +233,16 @@ class ListObs:
                                 })
         
         self.document['fields'] = fields_attrs
+        
+        if verbose:
+            print(f"Fields: {len(fields_attrs)}")
+            print("  ID   Code Name                RA               Decl           Epoch   SrcId      nRows")
+            for field in fields_attrs:
+                print(f"  {field['ID']:<4} {field['Code']:<4} {field['Name']:<19} {field['RA']:<15} {field['Decl']:<15} {field['Epoch']:<7} {field['SrcId']:<10} {field['nRows']}")
+        
         return fields_attrs
                   
-    def get_spectral_window(self):
+    def get_spectral_window(self, verbose=True):
                 
         print(f"Spectral Windows: ({len(self.ds_spw)} unique spectral windows and {len(self.ds_pol)} unique polarization setups)")
         print("  SpwID  Name   #Chans   Frame   Ch0(MHz)  ChanWid(kHz)  TotBW(kHz) CtrFreq(MHz)  Corrs")
@@ -217,20 +266,73 @@ class ListObs:
             corr_type = [StokesTypes[i] for i in corr_type]
 
             corr_type_print = ' '.join(corr_type)
+            spw_attrs.append({'id': spw_id, 'name': spw_name, 'nchan': nchan, 'spw_frame': spw_frame, 'chan_zero': chan_zero, 'chan_width': chan_wid, 'total_BW': total_BW, 'ctrfreq': ctrfreq, 'corr_type_': corr_type_print })
             print(f"  {spw_id}\t{spw_name}\t{nchan}\t{spw_frame}\t{chan_zero:.3f}\t{chan_wid:.3f}\t{total_BW}\t{ctrfreq:.4f}\t{corr_type_print}") 
-        
-                  
-    def get_source_list(self):
-        sources = xds_from_table(f"{self.filename}/SOURCE", column_keywords=True)
-        ds_source = sources[0]
-        for source in ds_source:
-            source = source.to_dict()
-            source_id = source['data_vars']['SOURCE_ID']['data']
-            names = source['data_vars']['NAME']['data']
-            spw_id = source['data_vars']['SPECTRAL_WINDOW_ID']['data']
-            rest_freq = np.squeeze(source['data_vars']['REST_FREQUENCY']['data'])
-            sysvel = np.squeeze(source['data_vars']['SYSVEL']['data'])
-                  
-            self.document['source_id'], self.document['source_names'], self.document['spw_id'], self.document['rest_freq'], self.document['sysvel'] = source_id, names, spw_id, rest_freq, sysvel
-        return {'source_id':source_id, 'source_names':names, 'spw_id':spw_id, 'rest_freq':rest_freq, 'sysvel':sysvel}
 
+        return spw_attrs
+                  
+    def get_source_list(self, verbose=True):
+        ds_source = self.sources[0]
+        sources = ds_source.to_dict()
+
+        source_id = sources['data_vars']['SOURCE_ID']['data']
+        names = sources['data_vars']['NAME']['data']
+        spw_id = sources['data_vars']['SPECTRAL_WINDOW_ID']['data']
+        rest_freq = sources['data_vars']['REST_FREQUENCY']['data']
+        rest_freq = [r_[0] for r_ in rest_freq]
+        sysvel = sources['data_vars']['SYSVEL']['data']
+        sysvel = [r_[0] for r_ in sysvel]
+
+        source_list = [{'id': source_id[i], 'name': names[i], 'spw_id': spw_id[i], 'rest_freq': rest_freq[i], 'sysvel': sysvel[i]} for i in range(0, len(source_id))]
+        self.document['sources'] = source_list
+
+        if verbose:
+            print(f"Sources: {len(sources)}")
+            print("  ID   Name                SpwId RestFreq(MHz)  SysVel(km/s) ")
+            for source in source_list:
+                print(f"  {source['id']:<4} {source['name']:<19} {source['spw_id']:<5} {source['rest_freq']/10**6:<14.0f} {source['sysvel']/10**3:<13}")
+
+        return source_list
+
+
+    def get_antenna_list(self, verbose=True):
+        """ Get the metadata for the antennas used in the measurement set.
+        
+        Parameters
+        ----------
+        verbose : Boolean
+            If true then return a list of dicts, each one with metadata for one 
+            antenna.
+        
+        Returns
+        -------
+        antenna_list : list-like()
+            A list of dictionary objects, each dictionary contains metadata for
+            one antenna.
+        """
+        antenna = xds_from_table(f"{self.filename}ANTENNA",  table_keywords=True, column_keywords=True)
+        ds_ant = antenna[0][0]
+        ant = ds_ant.to_dict()
+        
+        antenna_ids = ant['coords']['ROWID']['data']
+        names = ant['data_vars']['NAME']['data']
+        stations = ant['data_vars']['STATION']['data']
+        diameters = ant['data_vars']['DISH_DIAMETER']['data']
+        offsets = ant['data_vars']['OFFSET']['data']
+        itrf_coords = ant['data_vars']['POSITION']['data']
+
+        ant_coords = []
+        for pos in itrf_coords:
+            geodetic = EarthLocation.from_geocentric(pos[0], pos[1], pos[2], unit=u.m).geodetic
+            ant_coords.append([deg_min_sec(geodetic[0].value), deg_min_sec(geodetic[1].value), geodetic[2].value])
+
+        self.document['antennas'] = [{'id': antenna_ids[i], 'name': names[i], 'station': stations[i], 'diameter': diameters[i], 'coordinates': ant_coords[i], 'offset': offsets[i], 'irtf': itrf_coords[i]} for i in range(0, len(antenna_ids))]
+        
+        if verbose:
+            print(f"Antennas: {len(self.document['antennas'])}")
+            print(f"  ID   Name  Station   Diam.    Long.         Lat.                Offset from array center (m)                ITRF Geocentric coordinates (m)        s")
+            print(f"                                                                     East         North     Elevation               x               y               z")
+            for antenna in self.document['antennas']:
+                print(f"  {antenna['id']:<4} {antenna['name']:<5} {antenna['station']:<9} {antenna['diameter']:<8} {antenna['coordinates'][0]:<13} {antenna['coordinates'][1]:<22} {antenna['offset'][0]:<12} {antenna['offset'][1]:<9} {antenna['coordinates'][2]:<18.2f} {antenna['irtf'][0]:<15.1f} {antenna['irtf'][1]:<1.1f} {antenna['irtf'][2]:<1.1f}")
+                  
+        return self.document['antennas']
