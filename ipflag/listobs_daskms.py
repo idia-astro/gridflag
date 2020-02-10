@@ -1,9 +1,9 @@
 #!/usr/bin/python
 """List the summary of a data set.
 
-This function attempts to reproduce the CASA 'listobs' task using python, astropy, daskms, 
-and xarray.  It is written in a modular fashion so that some or all of the summary data 
-can be returned by the class as a data structure. 
+This function attempts to reproduce the CASA 'listobs' task using python, astropy, daskms,
+and xarray.  It is written in a modular fashion so that some or all of the summary data
+can be returned by the class as a data structure.
 
 Authors: Joseph Bochenek, Jeremy Smith
 """
@@ -22,7 +22,7 @@ StokesTypes= ['Undefined', 'I', 'Q', 'U', 'V', 'RR', 'RL', 'LR', 'LL', 'XX', 'XY
 
 def deg_min_sec(degrees = 0.0):
     """Format RA Decl output from astropy to CASA style
-    
+
     Author: Jeremy Smith
     """
     if type(degrees) != 'float':
@@ -33,20 +33,20 @@ def deg_min_sec(degrees = 0.0):
             return 0
     minutes = degrees%1.0*60
     seconds = minutes%1.0*60
-    
+
     return '%s.%s.%s' %(int(degrees), int(minutes), '{0:.2f}'.format(seconds))
-    
+
 class ListObs:
     """List metadata and summary data of Measurement Set.
-    
-    Load a measurement set (MS) file and get summary data or return properties for use in 
+
+    Load a measurement set (MS) file and get summary data or return properties for use in
     other programs.
-    
+
     Parameters
     ----------
     filename : String
         The path to a measurement set to be used by the class.
-    
+
     Example:
         myms = listobs(filename)
         myms.listobs()
@@ -62,37 +62,37 @@ class ListObs:
         self.table_attr = self.ms[1]
         self.col_attr = self.ms[2]
 
-        self.dd = xds_from_table(f"{filename}/DATA_DESCRIPTION")
-        self.spw = xds_from_table(f"{filename}/SPECTRAL_WINDOW", group_cols="__row__", table_keywords=True, column_keywords=True)
-        self.pol = xds_from_table(f"{filename}/POLARIZATION",  table_keywords=True, column_keywords=True)
-        self.fields = xds_from_table(f"{filename}/FIELD", column_keywords=True)
-        self.state = xds_from_table(f"{filename}/STATE",  table_keywords=True, column_keywords=True)
+        self.dd = xds_from_table(f"{filename}::DATA_DESCRIPTION")
+        self.spw = xds_from_table(f"{filename}::SPECTRAL_WINDOW", group_cols="__row__", table_keywords=True, column_keywords=True)
+        self.pol = xds_from_table(f"{filename}::POLARIZATION",  table_keywords=True, column_keywords=True)
+        self.fields = xds_from_table(f"{filename}::FIELD", column_keywords=True)
+        self.state = xds_from_table(f"{filename}::STATE",  table_keywords=True, column_keywords=True)
         try:
-            self.sources = xds_from_table(f"{filename}/SOURCE", group_cols=['__row__'], columns=['SOURCE_ID', 'NAME', 'SPECTRAL_WINDOW_ID', 'REST_FREQUENCY', 'SYSVEL'])
+            self.sources = xds_from_table(f"{filename}::SOURCE", group_cols=['__row__'], columns=['SOURCE_ID', 'NAME', 'SPECTRAL_WINDOW_ID', 'REST_FREQUENCY', 'SYSVEL'])
         except:
-            self.sources = xds_from_table(f"{filename}/SOURCE", group_cols=['__row__'], columns=['SOURCE_ID', 'NAME', 'SPECTRAL_WINDOW_ID'])
+            self.sources = xds_from_table(f"{filename}::SOURCE", group_cols=['__row__'], columns=['SOURCE_ID', 'NAME', 'SPECTRAL_WINDOW_ID'])
 
         self.ds_pol = self.pol[0]
         self.ds_spw = self.spw[0]
         self.ds_state = self.state[0][0]
-        
+
         self.dashlin2 = dashlin2 = '='*80
         self.document = {}
-        
+
     def get_summary(self, return_data=False):
         """ Print all metadata for the measurement sent to the standard output.
-        
+
         Parameters
         ----------
         return_data : Boolean
             If true then return a dictionary containing the metadata from all
-            the methods in the 
-        
+            the methods in the
+
         Returns
         -------
         document : dictionary
-            A dictionary of lists, each list contains metadata returned by one 
-            method of the class.  The keys in the dictionary define the 
+            A dictionary of lists, each list contains metadata returned by one
+            method of the class.  The keys in the dictionary define the
             information in the dictionary.
         """
         _ = self.get_ms_info()
@@ -100,7 +100,7 @@ class ListObs:
 
         _ = self.get_observation_info()
         print(f"   Observer: {self.document['observer']}     Project: {self.document['project']}  ")
-        print(f"Observation: {self.document['telescope_name']}")        
+        print(f"Observation: {self.document['telescope_name']}")
 
         _ = self.get_main_table()
         print(f"Data records: {self.document['nrows']}       Total elapsed time = {self.document['exposetime']:.2f} seconds\n   Observed from   {self.document['obstime'][0][0]}/{self.document['obstime'][0][1]}   to   {self.document['obstime'][1][0]}/{self.document['obstime'][1][1]} ({self.document['timeref']})\n" )
@@ -113,19 +113,19 @@ class ListObs:
 
         _ = self.get_source_list()
 
-        _ = self.get_antenna_list()    
+        _ = self.get_antenna_list()
         if return_data:
             return self.document
-                  
+
     def get_ms_info(self):
         ms_version = self.table_attr['MS_VERSION']
         table_name = self.filename
         self.document['ms_version'] = ms_version
         self.document['table_name'] = table_name
         return (ms_version, table_name)
-    
+
     def get_observation_info(self):
-        ds_obs = xds_from_table(f"{self.filename}/OBSERVATION")
+        ds_obs = xds_from_table(f"{self.filename}::OBSERVATION")
         observer = ds_obs[0].OBSERVER.data.compute()[0]
         project = ds_obs[0].PROJECT.data.compute()[0]
         tn = ds_obs[0].TELESCOPE_NAME.data.compute()[0]
@@ -133,7 +133,7 @@ class ListObs:
         self.document['telescope_name'] = tn
         self.document['project'] = project
         return observer, project, tn
-    
+
     def get_main_table(self):
         nrows, exposetimes, obstimes, timerefs, obsids, arrids = [], [], [], [], [], []
         for msds in self.ds_ms:
@@ -152,9 +152,10 @@ class ListObs:
             self.document['obsid'] = obsid
             self.document['arrid'] = arrid
             return (nrows, exposetimes, obstimes, timerefs)
-    
+
     def get_scan_list(self, verbose=True):
-        scans = xds_from_ms(self.filename, group_cols=['SCAN_NUMBER', "FIELD_ID"], index_cols=["SCAN_NUMBER", "TIME"])   
+        scans = xds_from_ms(self.filename, group_cols=['SCAN_NUMBER', "FIELD_ID"], index_cols=["SCAN_NUMBER", "TIME"])
+
         scan_list = []
         for scan in scans:
             scan_dict = {}
@@ -174,31 +175,31 @@ class ListObs:
             if state_id > -1:
                 scan_dict['intent'] = self.ds_state.OBS_MODE.to_dict()['data'][state_id]
             scan_list.append(scan_dict)
-        
+
         self.document['scan_list'] = scan_list
         if verbose:
             print("Date        Timerange (UTC)          Scan  FldId FieldName             nRows     SpwIds   Average Interval(s)    ScanIntent")
-            for scan in scan_list: 
+            for scan in scan_list:
                 times = scan['times']
                 if scan['scan_id'] == 1:
                     time_string = f"{times[0][0]}/{times[0][1]} - {times[1][1]}"
                 else:
                     time_string = f"{times[0][1]} - {times[1][1]}"
                 print(f"{time_string:>31}\t{scan['scan_id']:>9}{scan['field_id']:>7} {scan['field_name']:<22}{scan['nrows']:<10}{scan['spwids']:<9}{scan['interval']:<23}{scan['intent']:<10}")
-                  
+
             print("           (nRows = Total number of rows per scan) ")
         return scan_list
 
 
     def get_fields(self, verbose=True):
         """ Get the metadata for the fields in the measurement set.
-        
+
         Parameters
         ----------
         verbose : Boolean
-            If true then return a list of dicts, each one with metadata for one 
+            If true then return a list of dicts, each one with metadata for one
             field.
-        
+
         Returns
         -------
         antenna_list : list-like()
@@ -223,31 +224,31 @@ class ListObs:
         ds_grouped = xds_from_table(self.filename, column_keywords=True, group_cols=group_cols)
 
         field_row_count = {dg.attrs['FIELD_ID']: dg.row.count().to_dict()['data'] for dg in ds_grouped[0]}
-        
+
         for i in range(0,nrow):
             coords = SkyCoord(ra = ref_dir[i][0][0]*u.radian, dec = ref_dir[i][0][1]*u.radian )
-            fields_attrs.append({'ID': i, 
-                                 'Code' : code[i], 
-                                 'Name' : fieldName[i], 
+            fields_attrs.append({'ID': i,
+                                 'Code' : code[i],
+                                 'Name' : fieldName[i],
                                  'RA' : str(int(coords.ra.hms[0]))+':'+str(int(coords.ra.hms[1]))+':'+'{0:.2f}'.format(coords.ra.hms[2]),
                                  'Decl' : deg_min_sec(coords.dec.degree),
                                  'Epoch' : epoch,
                                  'SrcId': sourceID[i],
                                  'nRows' : field_row_count[i]
                                 })
-        
+
         self.document['fields'] = fields_attrs
-        
+
         if verbose:
             print(f"Fields: {len(fields_attrs)}")
             print("  ID   Code Name                RA               Decl           Epoch   SrcId      nRows")
             for field in fields_attrs:
                 print(f"  {field['ID']:<4} {field['Code']:<4} {field['Name']:<19} {field['RA']:<15} {field['Decl']:<15} {field['Epoch']:<7} {field['SrcId']:<10} {field['nRows']}")
-        
+
         return fields_attrs
-                  
+
     def get_spectral_window(self, verbose=True):
-                
+
         print(f"Spectral Windows: ({len(self.ds_spw)} unique spectral windows and {len(self.ds_pol)} unique polarization setups)")
         print("  SpwID  Name   #Chans   Frame   Ch0(MHz)  ChanWid(kHz)  TotBW(kHz) CtrFreq(MHz)  Corrs")
 
@@ -255,12 +256,11 @@ class ListObs:
 
         dd_spw_id = self.dd[0].SPECTRAL_WINDOW_ID.data.compute()
         dd_pol_id = self.dd[0].POLARIZATION_ID.data.compute()
-                  
         for msds in self.ds_ms:
             ddid = msds.attrs['DATA_DESC_ID']
             spw_id = dd_spw_id[ddid]
             spw_frame = self.spw[2]['CHAN_FREQ']['MEASINFO']['TabRefTypes'][self.ds_spw[spw_id].MEAS_FREQ_REF.data.compute()[0]]
-                  
+
             spw_name = self.ds_spw[spw_id].NAME.data.compute()[0]
             nchan = self.ds_spw[spw_id].NUM_CHAN.data.compute()[0]
             chan_zero = self.ds_spw[spw_id].CHAN_FREQ.data.compute()[0][0]/(10**6)
@@ -274,10 +274,10 @@ class ListObs:
 
             corr_type_print = ' '.join(corr_type)
             spw_attrs.append({'id': spw_id, 'name': spw_name, 'nchan': nchan, 'spw_frame': spw_frame, 'chan_zero': chan_zero, 'chan_width': chan_wid, 'total_BW': total_BW, 'ctrfreq': ctrfreq, 'corr_type_': corr_type_print })
-            print(f"  {spw_id}\t{spw_name}\t{nchan}\t{spw_frame}\t{chan_zero:.3f}\t{chan_wid:.3f}\t{total_BW}\t{ctrfreq:.4f}\t{corr_type_print}") 
+            print(f"  {spw_id}\t{spw_name}\t{nchan}\t{spw_frame}\t{chan_zero:.3f}\t{chan_wid:.3f}\t{total_BW}\t{ctrfreq:.4f}\t{corr_type_print}")
 
         return spw_attrs
-                  
+
     def get_source_list(self, verbose=True):
         ds_source = self.sources[0]
         sources = ds_source.to_dict()
@@ -308,13 +308,13 @@ class ListObs:
 
     def get_antenna_list(self, verbose=True):
         """ Get the metadata for the antennas used in the measurement set.
-        
+
         Parameters
         ----------
         verbose : Boolean
-            If true then return a list of dicts, each one with metadata for one 
+            If true then return a list of dicts, each one with metadata for one
             antenna.
-        
+
         Returns
         -------
         antenna_list : list-like()
@@ -324,7 +324,7 @@ class ListObs:
         antenna = xds_from_table(f"{self.filename}ANTENNA",  table_keywords=True, column_keywords=True)
         ds_ant = antenna[0][0]
         ant = ds_ant.to_dict()
-        
+
         antenna_ids = ant['coords']['ROWID']['data']
         names = ant['data_vars']['NAME']['data']
         stations = ant['data_vars']['STATION']['data']
@@ -338,12 +338,12 @@ class ListObs:
             ant_coords.append([deg_min_sec(geodetic[0].value), deg_min_sec(geodetic[1].value), geodetic[2].value])
 
         self.document['antennas'] = [{'id': antenna_ids[i], 'name': names[i], 'station': stations[i], 'diameter': diameters[i], 'coordinates': ant_coords[i], 'offset': offsets[i], 'irtf': itrf_coords[i]} for i in range(0, len(antenna_ids))]
-        
+
         if verbose:
             print(f"Antennas: {len(self.document['antennas'])}")
             print(f"  ID   Name  Station   Diam.    Long.         Lat.                Offset from array center (m)                ITRF Geocentric coordinates (m)        s")
             print(f"                                                                     East         North     Elevation               x               y               z")
             for antenna in self.document['antennas']:
                 print(f"  {antenna['id']:<4} {antenna['name']:<5} {antenna['station']:<9} {antenna['diameter']:<8} {antenna['coordinates'][0]:<13} {antenna['coordinates'][1]:<22} {antenna['offset'][0]:<12} {antenna['offset'][1]:<9} {antenna['coordinates'][2]:<18.2f} {antenna['irtf'][0]:<15.1f} {antenna['irtf'][1]:<1.1f} {antenna['irtf'][2]:<1.1f}")
-                  
+
         return self.document['antennas']

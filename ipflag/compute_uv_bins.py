@@ -117,9 +117,9 @@ def load_ms_file(msfile, fieldid=None, method='physical', ddid=0, chunksize:int=
     # Get spectral window table information
     spw_table_name = 'SPECTRAL_WINDOW'
     spw_col = 'CHAN_FREQ'
-    
-    da_vis = ds_ms.DATA
-    spw = xds_from_table(f'{msfile}/{spw_table_name}', columns=['NUM_CHAN', spw_col], column_keywords=True)
+
+    da_vis = ds_ms.datacolumn
+    spw = xds_from_table(f'{msfile}::{spw_table_name}', columns=['NUM_CHAN', spw_col], column_keywords=True)
     ds_spw, spw_attrs = spw[0][ddid], spw[1]
 
     col_units = spw_attrs['CHAN_FREQ']['QuantumUnits'][0]    
