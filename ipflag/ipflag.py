@@ -49,10 +49,10 @@ def _gridflag(ms, field_id, nsigma, uvrange, datacolumn):
         from ipflag import compute_uv_bins
         from ipflag import groupby_apply
 
-    from dask.distributed import Client
-    client = Client()
+    #from dask.distributed import Client
+    #client = Client()
 
-    ds_ind = compute_uv_bins.load_ms_file(ms, field_id, datacolumn=datacolumn)
+    ds_ind = compute_uv_bins.load_ms_file(ms, field_id, datacolumn=datacolumn)[0]
 
     # Get dask arrays of UV-bins and visibilities from XArray dataset
     dd_ubins = da.from_array(ds_ind.U_bins)

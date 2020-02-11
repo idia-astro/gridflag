@@ -36,6 +36,7 @@ def deg_min_sec(degrees = 0.0):
 
     return '%s.%s.%s' %(int(degrees), int(minutes), '{0:.2f}'.format(seconds))
 
+
 class ListObs:
     """List metadata and summary data of Measurement Set.
 
@@ -53,9 +54,9 @@ class ListObs:
         myfields = myms.get_summary()
     """
 
-    def __init__(self, filename):
+    def __init__(self, filename, datacolumn):
         self.filename = filename
-        self.ms = xds_from_ms(filename, columns=['DATA', 'TIME', 'OBSERVATION_ID', 'ARRAY_ID'], group_cols=["DATA_DESC_ID"], table_keywords=True, column_keywords=True)
+        self.ms = xds_from_ms(filename, columns=[datacolumn, 'TIME', 'OBSERVATION_ID', 'ARRAY_ID'], group_cols=["DATA_DESC_ID"], table_keywords=True, column_keywords=True)
         #self.ms = xds_from_ms(filename, table_keywords=True, column_keywords=True, group_cols=["DATA_DESC_ID"]) # Changed to above for split-by-spw data
 
         self.ds_ms = self.ms[0]
@@ -321,7 +322,7 @@ class ListObs:
             A list of dictionary objects, each dictionary contains metadata for
             one antenna.
         """
-        antenna = xds_from_table(f"{self.filename}ANTENNA",  table_keywords=True, column_keywords=True)
+        antenna = xds_from_table(f"{self.filename}::ANTENNA",  table_keywords=True, column_keywords=True)
         ds_ant = antenna[0][0]
         ant = ds_ant.to_dict()
 

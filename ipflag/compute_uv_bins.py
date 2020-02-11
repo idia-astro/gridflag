@@ -11,6 +11,7 @@ Todo:
     [X] Redo gridding based on resolution / fov of data
 """
 
+import os
 import numpy as np
 import scipy.constants
 
@@ -99,7 +100,7 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
     """
 
     # Load Metadata from the Measurement Set
-    msmd = listobs(msfile)
+    msmd = listobs(msfile, datacolumn)
 
     if fieldid==None:
         fields = msmd.get_fields(verbose=False)
@@ -129,7 +130,7 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
     spw_table_name = 'SPECTRAL_WINDOW'
     spw_col = 'CHAN_FREQ'
 
-    da_vis = ds_ms.datacolumn
+    da_vis = ds_ms[datacolumn]
     spw = xds_from_table(f'{msfile}::{spw_table_name}', columns=['NUM_CHAN', spw_col], column_keywords=True)
     ds_spw, spw_attrs = spw[0][ddid], spw[1]
 
@@ -190,13 +191,13 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
         #bincount = max_beam_size / ang_res
 
         fov = compute_fov(chan_freq, antennas)
-        binwidth = 2./fov # in lambda
-        binwidth = [int(bincount), int(bincount)]
+        binwidth = 1./fov # in lambda
+        binwidth = [int(binwidth), int(binwidth)]
         print(f"The calculated FoV is {np.rad2deg(fov)} deg.")
 
         #print(f"The calculated resolution of the instrument is {ang_res:.2f} arcseconds and the calculated field of view is {max_beam_size:.1f} arcseconds.")
-        bincount = [int((uvlimit[0][1] - uvlimit[0][0])/bincount[0]),
-                    int((uvlimit[1][1] - uvlimit[1][0])/bincount[1])]
+        bincount = [int((uvlimit[0][1] - uvlimit[0][0])/binwidth[0]),
+                    int((uvlimit[1][1] - uvlimit[1][0])/binwidth[1])]
 
     uvbins = [np.linspace( uvlimit[0][0], uvlimit[0][1], bincount[0] ),
               np.linspace( uvlimit[1][0], uvlimit[1][1], bincount[1] )]
