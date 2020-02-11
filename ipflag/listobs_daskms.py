@@ -257,6 +257,7 @@ class ListObs:
 
         dd_spw_id = self.dd[0].SPECTRAL_WINDOW_ID.data.compute()
         dd_pol_id = self.dd[0].POLARIZATION_ID.data.compute()
+
         for msds in self.ds_ms:
             ddid = msds.attrs['DATA_DESC_ID']
             spw_id = dd_spw_id[ddid]
