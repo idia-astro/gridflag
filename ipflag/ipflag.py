@@ -1,6 +1,7 @@
 #! /usr/bin/env python3
 
 import click
+import time
 
 ctx = dict(help_option_names=['-h', '--help'])
 
@@ -21,7 +22,9 @@ def main():
         help='Sigma to use while determining outliers [default: 3]')
 @click.option('--column', 'datacolumn', default='DATA',
         help='Column on which to operate [default: DATA]')
-def gridflag(ms, field_id, nsigma, uvrange, datacolumn):
+@click.option('--chunksize',  type=float, default=1E7,
+        help='Chunksize to use with dask - experiment for faster performance [default: 1E7]')
+def gridflag(ms, field_id, nsigma, uvrange, datacolumn, chunksize):
     """
     Run the GRIDflag flagger on the input MS, over the specified FIELD_ID.
 
@@ -30,16 +33,17 @@ def gridflag(ms, field_id, nsigma, uvrange, datacolumn):
     ignored.
     """
 
-    _gridflag(ms, field_id, nsigma, uvrange, datacolumn)
+    _gridflag(ms, field_id, nsigma, uvrange, datacolumn, chunksize)
 
 
-def _gridflag(ms, field_id, nsigma, uvrange, datacolumn):
+def _gridflag(ms, field_id, nsigma, uvrange, datacolumn, chunksize):
     """
     The 'internal' layer of gridflag - so that it's accessible
     via notebook/ipython without going through the click wrappers.
     """
 
     import dask.array as da
+    import numpy as np
     import dask
 
     # Depending on how it was installed one or the other will work.
@@ -51,35 +55,53 @@ def _gridflag(ms, field_id, nsigma, uvrange, datacolumn):
 
     #from dask.distributed import Client
     #client = Client()
+    #print(client)
 
-    ds_ind = compute_uv_bins.load_ms_file(ms, field_id, datacolumn=datacolumn)[0]
+    chunksize = int(chunksize)
+    ds_ind, _ = compute_uv_bins.load_ms_file(ms, field_id, datacolumn=datacolumn, chunksize=chunksize)
 
     # Get dask arrays of UV-bins and visibilities from XArray dataset
     dd_ubins = da.from_array(ds_ind.U_bins)
     dd_vbins = da.from_array(ds_ind.V_bins)
 
-    dd_vals = da.from_array(ds_ind.DATA[:,0])
+    #dd_vals = da.from_array(ds_ind.DATA[:,0])
+    dd_vals = da.asarray(ds_ind.DATA)
+    # Stokes I only - for the moment.
+    dd_vals = da.absolute(dd_vals[:,0] + dd_vals[:,3])
 
     # Combine U and V bins into one dask array
     dd_bins = da.stack([dd_ubins, dd_vbins]).T
 
     # Apply unifrom chunks to both dask arrays
-    chunk_size = 1E7
-    dd_bins = dd_bins.rechunk([chunk_size, 2])
-    dd_vals = dd_vals.rechunk([chunk_size, 1])
+    dd_bins = dd_bins.rechunk([chunksize, 2])
+    dd_vals = dd_vals.rechunk(chunksize)
 
-    value_group_chunks = [
-        dask.delayed(groupby_apply.group_bin_values_wrap)(part[0][0], part[1])
-        for part in zip(dd_bins, dd_vals)
-    ]
+    value_group_chunks = da.map_blocks(groupby_apply.group_bin_values_wrap, dd_bins, dd_vals, dtype=float)
+
+    #value_group_chunks = [
+    #    dask.delayed(groupby_apply.group_bin_values_wrap)(part[0][0], part[1])
+    #    for part in zip(dd_bins, dd_vals)
+    #]
+
+    #value_group_chunks.visualize("bin_graph.svg")
+    print("AAA")
+    print(time.time())
+
+    groupby_apply.combine_group_values(value_group_chunks)
+
+    print("hello")
     value_groups_ = \
         dask.delayed(groupby_apply.combine_group_values)(value_group_chunks)
+    print("hello")
 
     median_bins = \
         dask.delayed(groupby_apply.apply_to_groups)(value_groups_, np.median)
+    print("hello")
+
 
     std_bins = \
         dask.delayed(groupby_apply.apply_to_groups)(value_groups_, np.std)
+    print("hello")
 
 if __name__ == '__main__':
     main()

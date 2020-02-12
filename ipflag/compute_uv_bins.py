@@ -12,6 +12,7 @@ Todo:
 """
 
 import os
+import numba as nb
 import numpy as np
 import scipy.constants
 
@@ -193,7 +194,7 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
         fov = compute_fov(chan_freq, antennas)
         binwidth = 1./fov # in lambda
         binwidth = [int(binwidth), int(binwidth)]
-        print(f"The calculated FoV is {np.rad2deg(fov)} deg.")
+        print(f"The calculated FoV is {np.rad2deg(fov):.2f} deg.")
 
         #print(f"The calculated resolution of the instrument is {ang_res:.2f} arcseconds and the calculated field of view is {max_beam_size:.1f} arcseconds.")
         bincount = [int((uvlimit[0][1] - uvlimit[0][0])/binwidth[0]),
