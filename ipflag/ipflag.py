@@ -67,7 +67,7 @@ def _gridflag(ms, field_id, nsigma, uvrange, datacolumn, chunksize):
     #dd_vals = da.from_array(ds_ind.DATA[:,0])
     dd_vals = da.asarray(ds_ind.DATA)
     # Stokes I only - for the moment.
-    dd_vals = da.absolute(dd_vals[:,0] + dd_vals[:,3])
+    dd_vals = da.absolute(dd_vals[:,0] + dd_vals[:,1])
 
     # Combine U and V bins into one dask array
     dd_bins = da.stack([dd_ubins, dd_vbins]).T
@@ -76,32 +76,31 @@ def _gridflag(ms, field_id, nsigma, uvrange, datacolumn, chunksize):
     dd_bins = dd_bins.rechunk([chunksize, 2])
     dd_vals = dd_vals.rechunk(chunksize)
 
-    value_group_chunks = da.map_blocks(groupby_apply.group_bin_values_wrap, dd_bins, dd_vals, dtype=float)
+    bin_partitions = dd_bins.to_delayed()
+    val_partitions = dd_vals.to_delayed()
 
-    #value_group_chunks = [
-    #    dask.delayed(groupby_apply.group_bin_values_wrap)(part[0][0], part[1])
-    #    for part in zip(dd_bins, dd_vals)
-    #]
+    #value_group_chunks = da.map_blocks(groupby_apply.group_bin_values_wrap, dd_bins, dd_vals, dtype=float)
+    value_group_chunks = [
+        dask.delayed(groupby_apply.group_bin_values_wrap)(part[0][0], part[1])
+        for part in zip(bin_partitions, val_partitions)
+    ]
 
     #value_group_chunks.visualize("bin_graph.svg")
-    print("AAA")
-    print(time.time())
+    #groupby_apply.combine_group_values(value_group_chunks)
 
-    groupby_apply.combine_group_values(value_group_chunks)
-
-    print("hello")
     value_groups_ = \
         dask.delayed(groupby_apply.combine_group_values)(value_group_chunks)
-    print("hello")
 
     median_bins = \
         dask.delayed(groupby_apply.apply_to_groups)(value_groups_, np.median)
-    print("hello")
-
 
     std_bins = \
         dask.delayed(groupby_apply.apply_to_groups)(value_groups_, np.std)
-    print("hello")
+
+    print("computing median grid")
+    median_grid = median_bins.compute()
+    print("computing std grid")
+    std_grid = std_bins.compute()
 
 if __name__ == '__main__':
     main()

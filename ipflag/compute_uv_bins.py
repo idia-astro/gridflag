@@ -12,7 +12,7 @@ Todo:
 """
 
 import os
-import numba as nb
+#import numba as nb
 import numpy as np
 import scipy.constants
 
@@ -20,7 +20,13 @@ import dask.array as da
 import xarray as xr
 from daskms import xds_from_table, xds_from_ms
 
-from .listobs_daskms import ListObs as listobs
+# Depending on how it was installed one or the other will work.
+try:
+    from listobs_daskms import ListObs as listobs
+except ModuleNotFoundError:
+    from ipflag.listobs_daskms import compute_uv_bins
+    from ipflag.listobs_daskms import groupby_apply
+
 
 def compute_angular_resolution(uvw_chan):
     '''Compute the angular resolution as set by the psf / dirty beam.'''

@@ -13,7 +13,7 @@ Todo:
 """
 
 import numpy as np
-import numba as nb
+#import numba as nb
 import scipy.constants
 
 
@@ -188,7 +188,6 @@ def group_bin_values(bins, values) -> tuple:
 
     '''
 
-    print(bins, values)
     bin_group = []
     for bin_col in bins:
         bin_group.append(np.unique(bin_col, return_inverse=True))
@@ -219,7 +218,6 @@ def group_bin_values_wrap(da_bins, da_vals):
 
     """
 
-    print(da_bins, da_vals)
     bins = [da_bins[:,0], da_bins[:,1]]
     res = group_bin_values(bins, da_vals)
     return res
@@ -280,7 +278,7 @@ def apply_to_groups(val_groups, function):
     for i, vals in enumerate(val_groups):
         for j, vals_ in enumerate(vals):
             if len(vals_):
-                print(i, j, function(vals_))
+                #print(i, j, function(vals_))
                 result[i][j] = function(vals_)
 
     result = [np.array(row) for row in result]
