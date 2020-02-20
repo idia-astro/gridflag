@@ -49,16 +49,17 @@ def _gridflag(ms, field_id, nsigma, uvrange, datacolumn, chunksize):
     # Depending on how it was installed one or the other will work.
     try:
         import compute_uv_bins, groupby_apply
+        from annulus_stats import get_bin_thresholds
     except ModuleNotFoundError:
         from ipflag import compute_uv_bins
         from ipflag import groupby_apply
+        from ipflag.annulus_stats import get_bin_thresholds
 
-    #from dask.distributed import Client
-    #client = Client()
-    #print(client)
+    from dask.distributed import Client
+    client = Client()
 
     chunksize = int(chunksize)
-    ds_ind, _ = compute_uv_bins.load_ms_file(ms, field_id, datacolumn=datacolumn, chunksize=chunksize)
+    ds_ind, _, binwidth = compute_uv_bins.load_ms_file(ms, field_id, datacolumn=datacolumn, chunksize=chunksize)
 
     # Get dask arrays of UV-bins and visibilities from XArray dataset
     dd_ubins = da.from_array(ds_ind.U_bins)
@@ -98,9 +99,18 @@ def _gridflag(ms, field_id, nsigma, uvrange, datacolumn, chunksize):
         dask.delayed(groupby_apply.apply_to_groups)(value_groups_, np.std)
 
     print("computing median grid")
-    median_grid = median_bins.compute()
+    #median_grid = np.asarray(median_bins.compute())
+    median_grid = np.load('median_grid.npy')
+    #print(median_grid.shape, type(median_grid), median_grid.dtype)
     print("computing std grid")
-    std_grid = std_bins.compute()
+    #std_grid = np.asarray(std_bins.compute())
+    std_grid = np.load('std_grid.npy')
+
+    annulus_width = [3000, 8000, 100000]
+    min_grid, max_grid = get_bin_thresholds(median_grid, std_grid, nsigma, annulus_width, binwidth)
+
+    np.save('median_grid.npy', median_grid)
+    np.save('std_grid.npy', std_grid)
 
 if __name__ == '__main__':
     main()

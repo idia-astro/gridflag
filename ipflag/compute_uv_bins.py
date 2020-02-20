@@ -223,4 +223,4 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
     ds_ind = ds_ind.chunk({'corr': 4, 'uvw': 2, 'newrow': chunksize})
     ds_ind = ds_ind.unify_chunks()
 
-    return ds_ind, uvbins
+    return ds_ind, uvbins, binwidth
