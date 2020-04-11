@@ -1,23 +1,27 @@
 #!/usr/bin/python
 """
-GridFlag
+Compute UV Bins
 
 Use XArray, Dask, and Numpy to load CASA Measurement Set (MS) data and
 create binned UV data.
 
 Todo:
+    [ ] What do we do with existing flags
     [ ] Add uv range parameters
-    [ ] Add hermitian folding code
+    [ ] Add hermitian folding code (do we need it?)
     [X] Redo gridding based on resolution / fov of data
+    [ ] Fix write function to take pol argument
 """
 
 import os
 import numpy as np
 import scipy.constants
 
+import dask
 import dask.array as da
+
 import xarray as xr
-from daskms import xds_from_table, xds_from_ms
+from daskms import xds_from_table, xds_from_ms, xds_to_table
 
 from .listobs_daskms import ListObs as listobs
 
@@ -27,6 +31,7 @@ def compute_angular_resolution(uvw_chan):
     max_baseline = np.max(uv_dist).data.compute()
     ang_res = (1/max_baseline) * (180/np.pi) * 3600  # convert to arcseconds
     return ang_res
+
 
 def compute_fov(chan_freq, antennas):
     '''
@@ -53,6 +58,12 @@ def compute_fov(chan_freq, antennas):
 
 
 def list_fields(msmd):
+    """Print a list fields in measurement set.
+    
+    Parameters
+    ----------
+    msmd : listobs-object
+    """
     field_list = msmd.get_fields(verbose=False)
     scan_list = msmd.get_scan_list(verbose=False)
     field_intent = {}
@@ -65,7 +76,8 @@ def list_fields(msmd):
         name = field['Name']
         print(f"{i:<5} {name:<15} {field_intent[name]}")
 
-def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddid=0, chunksize:int=10**7):
+
+def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddid=0, chunksize:int=10**7, bin_count_factor=1):
     """
     Load selected data from the measurement set (MS) file and convert to xarray
     DataArrays. Transform data for analysis.
@@ -87,6 +99,10 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
         The unique identifier for the data description id. Default is zero.
     chunksize : int
         Size of chunks to be used with Dask.
+    bin_count_factor : float
+        A factor to control binning if the automatic binning doesn't work 
+        right. A factor of 0.5 results in half the bins in u and v. 
+        default: 1.
 
     Returns
     -------
@@ -96,7 +112,6 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
     uvbins: xarray.Dataset
         A dataset containing flattened visabilities with a binned UV set for
         each observation point.
-
     """
 
     # Load Metadata from the Measurement Set
@@ -196,8 +211,9 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
         print(f"The calculated FoV is {np.rad2deg(fov)} deg.")
 
         #print(f"The calculated resolution of the instrument is {ang_res:.2f} arcseconds and the calculated field of view is {max_beam_size:.1f} arcseconds.")
-        bincount = [int((uvlimit[0][1] - uvlimit[0][0])/binwidth[0]),
-                    int((uvlimit[1][1] - uvlimit[1][0])/binwidth[1])]
+        bincount = [int(bin_count_factor*(uvlimit[0][1] - uvlimit[0][0])/binwidth[0]),
+                    int(bin_count_factor*(uvlimit[1][1] - uvlimit[1][0])/binwidth[1])]
+                    
     uvbins = [np.linspace( uvlimit[0][0], uvlimit[0][1], bincount[0] ),
               np.linspace( uvlimit[1][0], uvlimit[1][1], bincount[1] )]
 
@@ -217,3 +233,53 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
     ds_ind = ds_ind.unify_chunks()
 
     return ds_ind, uvbins
+
+
+def write_ms_file(msfile, ds_ind, flag_ind_list, field_id, datacolumn="DATA", chunk_size=10**6):
+    """ Convert flags to the correct format and write flag column to a 
+    measurement set (MS).
+
+    Parameters
+    ----------
+    msfile : string
+        Location of the MS file.
+    ds_ind: xarray.Dataset
+        The contents of the main table of the MS columns DATA and UVW flattened
+        and scaled by wavelength.
+    flag_ind_list : array-like
+        One dimensional array with indicies of flagged visibilities.
+    field_id : int
+        The unique identifier of the field to be flagged.
+    chunksize : int
+        Size of chunks to be used with Dask.
+        
+    Todo:
+    [ ] There's probably a more clever/efficient way to do this one.
+    """
+
+    # Initiate column with all values false then set flagged rows to True
+    flag_ind_col = np.zeros((len(ds_ind.newrow)), dtype=bool)
+    flag_ind_col[flag_ind_list] = True
+    
+    # Convert to Dask array and project to all polarisations
+    # FIX - take number of pol columns and use here instead of "2"
+    da_flag_row = da.from_array(flag_ind_col)
+    da_flag_pol = da.stack([da_flag_row, da_flag_row])
+    da_flag_pol = da_flag_pol.rechunk([2, chunk_size]).T
+    
+    # Write flag column to ds_ind (from compute_uv_bins.load_ms_file function).
+    ds_ind_flag = ds_ind.assign(FLAG=(("newrow", "corr"), da_flag_pol))
+    
+    # Convert ds_ind back to original format (unstack, transpose)
+    ds_ind_flag = ds_ind_flag.unstack().transpose('row', 'chan', 'corr', 'uvw')
+    
+    # Re-open the MS with daskms and write flag col to the xarray
+    ms = xds_from_ms(msfile, columns=[datacolumn, 'UVW', 'FLAG'], group_cols=['FIELD_ID'])
+    
+    ms[field_id] = ms[field_id].assign(FLAG=( ("row", "chan", "corr"), ds_ind_flag.FLAG.data ) )
+    ms[field_id] = ms[field_id].unify_chunks()
+
+    writes = xds_to_table(ms, msfile, ["FLAG"])
+    
+    # Call compute to write to file
+    dask.compute(writes)
