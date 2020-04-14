@@ -1,3 +1,5 @@
+import numpy as np
+
 from bokeh.plotting import figure, show
 from bokeh.models import ColumnDataSource, Label
 from bokeh.palettes import Spectral6
@@ -6,52 +8,11 @@ from bokeh.layouts import gridplot
 
 from bokeh.util.hex import hexbin
 
-import numpy as np
 from scipy.stats import median_absolute_deviation, gamma, chi2, poisson, expon, lognorm, rice, rayleigh
 
 import dask
 import dask.array as da
 
-import groupby_apply
-
-def map_grid_function(ds_ind, data_columns, chunk_size=10**6, return_index=False):
-    # Get dask arrays of UV-bins and visibilities from XArray dataset
-    dd_ubins = da.from_array(ds_ind.U_bins)
-    dd_vbins = da.from_array(ds_ind.V_bins)
-    dd_vals = da.from_array(np.absolute(ds_ind.DATA[:,data_columns[0]]+ds_ind.DATA[:,data_columns[1]]))
-
-    # Combine U and V bins into one dask array
-    dd_bins = da.stack([dd_ubins, dd_vbins]).T
-    
-    # Apply unifrom chunks to both dask arrays
-    dd_bins = dd_bins.rechunk([chunk_size, 2])
-    dd_vals = dd_vals.rechunk([chunk_size, 1])
-    
-    # Convert to delayed data structures
-    bin_partitions = dd_bins.to_delayed()
-    val_partitions = dd_vals.to_delayed()
-
-    # Compute indicies for each bin in the grid for each chunk
-    value_group_chunks = [dask.delayed(groupby_apply.group_bin_values_wrap)(part[0][0], part[1]) for part in zip(bin_partitions, val_partitions)]
-    value_groups_ = dask.delayed(groupby_apply.combine_group_values)(value_group_chunks)
-
-    # Compute index groups for each bin
-    index_group_chunks = [dask.delayed(groupby_apply.groupby_nd_wrap)(part[0], init_index=int(chunk_size*i)) for i, part in enumerate(bin_partitions)]
-    index_groups_ = dask.delayed(groupby_apply.combine_ind_chunks)(index_group_chunks)
-
-    if return_index:
-        # Compute the grid from above without doing the apply step
-        value_groups = value_groups_.compute()
-        index_groups = index_groups_.compute()
-        return value_groups, index_groups
-    else:
-        # Apply the function to the grid without explicitly computing the indicies
-        median_grid_ = dask.delayed(groupby_apply.apply_to_groups)(value_groups_, np.median)
-        std_grid_ = dask.delayed(groupby_apply.apply_to_groups)(value_groups_, np.std) 
-        median_grid = median_grid_.compute()
-        std_grid = std_grid_.compute()
-        return median_grid, std_grid 
-        
 
 def plot_uv_grid(median_grid, uvbins, annulus_width, bin_max=None):
 
@@ -492,6 +453,7 @@ def plot_one_annulus(value_groups, median_grid, annulus_range, uvbins, hrange, n
 #     plotgrid.plot_bin_dist(ann_vals[np.where((ann_bin>0.)&(ann_bin<3.3))], func=func, nbins=100, hrange=[0,3.3])
     return params
 
+
 def plot_grid_for_annulus(value_groups, median_grid, annulus_range, uvbins, hrange=[0,10]):
 
     uv_bins = np.asarray(median_grid>0).nonzero()
@@ -520,9 +482,10 @@ def plot_grid_for_annulus(value_groups, median_grid, annulus_range, uvbins, hran
     bins = plot_bin_grid_2(ann_bins[np.where((ann_bin_ratio<bin_ratio_range[1]) & (ann_bin_ratio>bin_ratio_range[0]))][:90], bin_names, hrange=hrange)
 #     return closure_uv_dist
 
+
 def plot_grid_binrange(value_groups, bin_range, nbins=100):
 
-    u_range, v_range = np.arange(bin_range[0][0], bin_range[0][1]), np.arange(bin_range[1][0], bin_range[1][1])
+    u_range, v_range = np.arange(bin_range[0][0], bin_range[0][1]+1), np.arange(bin_range[1][1], bin_range[1][0]-1, -1)
     
     bingrid = np.meshgrid(u_range, v_range)
 

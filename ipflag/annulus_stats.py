@@ -56,6 +56,9 @@ def remove_zero_values(bin_val, bin_ind, bin_name):
     bin_ind : array-like
         Array of lists of indicies for all bins in annulus or other group of 
         bins.
+    bin_name : array-like
+        Array of lists of bin names for all bins in annulus or other group of 
+        bins.
         
     Returns
     -------
@@ -68,18 +71,28 @@ def remove_zero_values(bin_val, bin_ind, bin_name):
         
     '''
     
-    bin_val_c  = np.array([bin_val[np.where(bin_val>0) ] for bin_val in bin_val])    
-    bin_ind_c = np.array([bin_ind[np.where(bin_val>0)] for bin_val, bin_ind in zip(bin_val, bin_ind)])
+    bin_val_c  = np.array([bv[np.where(bv>0)] for bv in bin_val])    
+    bin_ind_c  = np.array([bi[np.where(bv>0)] for bv, bi in zip(bin_val, bin_ind)])
 
-    flag_ind = np.array([bin_ind[np.where(bin_val==0)] for bin_val, bin_ind in zip(bin_val, bin_ind)])
-    flag_ind = np.concatenate(flag_ind)
+    flag_ind = np.array([bi[np.where(bv==0)] for bv, bi in zip(bin_val, bin_ind)])
 
-    ann_bin_cnt = length_checker(bin_val_c) 
 
-    # Filter out Zero Length bins from Annulus Stats
-    bin_val = bin_val_c[np.where(ann_bin_cnt>0)]
-    bin_ind = bin_ind_c[np.where(ann_bin_cnt>0)]
-    bin_name = bin_name[np.where(ann_bin_cnt>0)]
+    if len(flag_ind) > 0:
+        flag_ind = np.concatenate(flag_ind)
+    else:
+        flag_ind = np.array([])
+
+    print(f"\tflag_ind: {len(flag_ind)}\t bin_val_c: {len(bin_val_c)} \t bin_ind_c: {len(bin_ind_c)}")
+
+    if len(bin_val_c):  
+        ann_bin_cnt = length_checker(bin_val_c) 
+
+        # Filter out Zero Length bins from Annulus Stats
+        bin_val = bin_val_c[np.where(ann_bin_cnt>0)]
+        bin_ind = bin_ind_c[np.where(ann_bin_cnt>0)]
+        bin_name = bin_name[np.where(ann_bin_cnt>0)]
+    else:
+        bin_val, bin_ind, bin_name = np.array([]), np.array([]), np.array([])
 
     return bin_val, bin_ind, bin_name, flag_ind
 
@@ -99,13 +112,13 @@ def select_annulus_bins(minuv, maxuv, value_groups, index_groups, median_grid, u
     annulus_bins = np.where((bin_uv_dist > minuv) & (bin_uv_dist < maxuv))[0]
 
     ann_bin_val = np.array([np.array(value_groups[x-1][y-1]) for x,y in zip(uv_bins_[:,annulus_bins][0], uv_bins_[:,annulus_bins][1])])
-    ann_bin_ind = np.array([np.array(index_groups[x-1][y-1]) for x,y in zip(uv_bins_[:,annulus_bins][0], uv_bins_[:,annulus_bins][1])])
+    ann_bin_ind = np.array([np.array(index_groups[x-1][y-1], dtype=int) for x,y in zip(uv_bins_[:,annulus_bins][0], uv_bins_[:,annulus_bins][1])])
     ann_bin_name = np.array([(x-1,y-1) for x,y in zip(uv_bins_[:,annulus_bins][0], uv_bins_[:,annulus_bins][1])])
 
     # Remove zero amplitude values from all bins
     ann_bin_val, ann_bin_ind, ann_bin_name, bin_flag_ind = remove_zero_values(ann_bin_val, ann_bin_ind, ann_bin_name)
     
-    return ann_bin_val, ann_bin_ind, ann_bin_name
+    return ann_bin_val, ann_bin_ind, ann_bin_name, bin_flag_ind
 
 
 
@@ -121,15 +134,19 @@ def compute_annulus_stats(median_grid, value_groups, index_groups, uvbins, annul
             minuv = annulus_width[ind-1]
         maxuv = annulus_width[ind]
 
-        ann_bin_val, ann_bin_ind, ann_bin_name = select_annulus_bins(minuv, maxuv, value_groups, index_groups, median_grid, uvbins)
-
         print(f"Annulus ({minuv}-{maxuv}): ")
 
+        ann_bin_val, ann_bin_ind, ann_bin_name, bin_flag_ind = select_annulus_bins(minuv, maxuv, value_groups, index_groups, median_grid, uvbins)
+
+        # Add pre-flagged visibilities
+        flag_ind_list.append(bin_flag_ind)
+        
+        # Re-compute bin medians
         ann_bin_median = np.array([np.median(_) for _ in ann_bin_val])
 
         ci_lower, ci_upper = get_annulus_limits(ann_bin_median, sigma)
         
-        print(f"\t count: {len(ann_bin_val)},\t median: {np.median(ann_bin_median):.3f}, CI: [{ci_lower:.3f}, {ci_upper:.3f}]")
+        print(f"\t count: {len(ann_bin_val)},\t median: {np.median(ann_bin_median):.3f},\t pre-flags:{len(bin_flag_ind)}\t CI: [{ci_lower:.3f}, {ci_upper:.3f}]")
 
         for bin_val, bin_ind, bin_name in zip(ann_bin_val, ann_bin_ind, ann_bin_name):
             u, v = bin_name[0], bin_name[1]
@@ -141,6 +158,8 @@ def compute_annulus_stats(median_grid, value_groups, index_groups, uvbins, annul
             value_groups_flg[u][v] = bin_val
             median_grid_flg[u][v] = np.median(bin_val)
             flag_ind_list.append(bin_flg)
+        
+        print(f"\t post-flags: {len(flag_ind_list)}")
         
     flag_ind_list = np.concatenate(flag_ind_list)
 
