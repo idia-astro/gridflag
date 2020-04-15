@@ -15,7 +15,7 @@ import numpy as np
 import dask
 import dask.array as da
 
-import groupby_apply
+from . import groupby_apply
 
 def map_grid_function(ds_ind, data_columns, chunk_size:int=10**6, return_index:bool=False):
     """    
