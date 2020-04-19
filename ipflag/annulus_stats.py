@@ -97,6 +97,17 @@ def remove_zero_values(bin_val, bin_ind, bin_name):
     return bin_val, bin_ind, bin_name, flag_ind
 
 
+def compute_annulus_bins(median_grid, uvbins, nbins):
+
+    uv_bins = np.asarray(median_grid>0).nonzero()
+    (u, v) = uv_bins
+    uv_bins_ = np.array([uv_bins[0], uv_bins[1]])
+    bin_uv_dist = np.sqrt(uvbins[0][uv_bins_[0]-1]**2 + uvbins[1][uv_bins_[1]-1]**2)
+    bin_uv_dist_sort = np.sort(bin_uv_dist)
+    
+    annulus_bins = np.quantile(bin_uv_dist_sort, np.linspace(0,1,nbins+1)[1:])
+    return annulus_bins
+
 
 def select_annulus_bins(minuv, maxuv, value_groups, index_groups, median_grid, uvbins):
 
