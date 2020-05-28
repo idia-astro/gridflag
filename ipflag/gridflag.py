@@ -82,9 +82,6 @@ def map_amplitude_grid(ds_ind, data_columns, stokes='I', chunk_size:int=10**6, r
 
 #     group_chunks = [dask.delayed(groupby_apply.group_bin_idx_val_wrap)(part[0][0], part[1]) for part in zip(bin_partitions, val_partitions)]    
 #     groups = dask.delayed(groupby_apply.combine_group_idx_val)(group_chunks)
-
-    
-    return groups
     
     if return_index:
         # Compute the grid from above without doing the apply step

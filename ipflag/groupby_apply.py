@@ -181,6 +181,23 @@ def group_bin_values_wrap(da_bins, da_vals):
 
 # --- --- --- --- Group all columns in one function --- --- --- ---
 
+def group_bin_flagval_wrap(da_bins, da_vals, da_flags):
+    """
+    Wrap the groupby_nd function to parse dask arrays to numpy like.
+
+    Parameters
+    ----------
+    dd_data: array-like
+        A dask array with two columns for integer bin values and one
+        column for values that will be the argument for a function.
+
+    """
+
+    bins = [da_bins[:,0], da_bins[:,1]]
+    res = groupby_flagval(bins, da_vals, da_flags)
+    return res
+
+
 def groupby_flagval(bins, values, flags, init_index:int=0) -> tuple:
     """
     Performs a groupby operation on two bin parameters and returns the list
@@ -201,44 +218,32 @@ def groupby_flagval(bins, values, flags, init_index:int=0) -> tuple:
         A list of arrays with indicies of bins.
     """
 
-    print("Starting groupby stage")
+#     print("Starting groupby stage")
   
     sorted_keys = [np.unique(bin_col) for bin_col in bins]
 
-    print("End sorting")
+#     print("End sorting")
 
     n_bins = [int(max(skeys) + 1) for skeys in sorted_keys]
 
-    print("Make empty array")
+#     print("Make empty array")
     
     index_grid = [[[]for j in range(n_bins[1])] for i in range(n_bins[0])]
     value_grid = [[[]for j in range(n_bins[1])] for i in range(n_bins[0])]
     flags_grid = [[[]for j in range(n_bins[1])] for i in range(n_bins[0])]
 
     for i, k_ in enumerate(zip(bins[0], bins[1], values, flags)):
-        if not(i%10**7):
-            print(f"Processing record {i}")
+#         if not(i%10**7):
+#             print(f"Processing record {i}")
         index_grid[k_[0]][k_[1]].append(i+init_index)
         value_grid[k_[0]][k_[1]].append(np.absolute(k_[2]))
         flags_grid[k_[0]][k_[1]].append(np.absolute(k_[3]))
-        
+
     return (index_grid, value_grid, flags_grid)
 
-def group_bin_flagval_wrap(da_bins, da_vals, da_flags):
-    """
-    Wrap the groupby_nd function to parse dask arrays to numpy like.
 
-    Parameters
-    ----------
-    dd_data: array-like
-        A dask array with two columns for integer bin values and one
-        column for values that will be the argument for a function.
-
-    """
-
-    bins = [da_bins[:,0], da_bins[:,1]]
-    res = groupby_flagval(bins, da_vals, da_flags)
-    return res
+def combine_group_partitions_flagval():
+    return True
 
 
 def combine_group_flagval(val_list_chunks):
@@ -258,12 +263,12 @@ def combine_group_flagval(val_list_chunks):
         A list of arrays with values of bins.
     '''
 
-    print("Start combine stage")
+#     print("Start combine stage")
     
     x_max = np.max([len(x_dim[0]) for x_dim in val_list_chunks])
     y_max = np.max([len(x_dim[0][0]) for x_dim in val_list_chunks])
 
-    print(f"Grid dimensions: ({x_max}, {y_max})")
+#     print(f"Grid dimensions: ({x_max}, {y_max})")
 
     idx_list_cat = [[[]for j in range(y_max)] for i in range(x_max)]
     val_list_cat = [[[]for j in range(y_max)] for i in range(x_max)]
