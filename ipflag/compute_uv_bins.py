@@ -132,7 +132,7 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
     print('Compute UV Bins')
     print('---------------')
 
-    ms = xds_from_ms(msfile, columns=[datacolumn, 'UVW'], group_cols=['FIELD_ID'], table_keywords=True, column_keywords=True)
+    ms = xds_from_ms(msfile, columns=[datacolumn, 'UVW', 'FLAG'], group_cols=['FIELD_ID'], table_keywords=True, column_keywords=True)
 
     # Split the dataset and attributes
     try:
@@ -146,6 +146,7 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
     spw_col = 'CHAN_FREQ'
 
     da_vis = ds_ms[datacolumn]
+    da_flg = ds_ms['FLAG']
     spw = xds_from_table(f'{msfile}::{spw_table_name}', columns=['NUM_CHAN', spw_col], column_keywords=True)
     ds_spw, spw_attrs = spw[0][ddid], spw[1]
 
@@ -208,7 +209,7 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
         fov = compute_fov(chan_freq, antennas)
         binwidth = 1./fov # in lambda
         binwidth = [int(binwidth), int(binwidth)]
-        print(f"The calculated FoV is {np.rad2deg(fov)} deg.")
+        print(f"The calculated FoV is {np.rad2deg(fov):.2f} deg.")
 
         #print(f"The calculated resolution of the instrument is {ang_res:.2f} arcseconds and the calculated field of view is {max_beam_size:.1f} arcseconds.")
         bincount = [int(bin_count_factor*(uvlimit[0][1] - uvlimit[0][0])/binwidth[0]),
@@ -219,13 +220,13 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
 
     print(f"Creating a UV-grid with ({bincount[0]}, {bincount[1]}) bins with bin size {binwidth[0]} by {binwidth[1]} lambda.")
 
-    uval_dig = xr.apply_ufunc(da.digitize, ds_vis.UVW_scaled[:,:,0], uvbins[0], dask='allowed')
-    vval_dig = xr.apply_ufunc(da.digitize, ds_vis.UVW_scaled[:,:,1], uvbins[1], dask='allowed')
+    uval_dig = xr.apply_ufunc(da.digitize, ds_vis.UVW_scaled[:,:,0], uvbins[0], dask='allowed', output_dtypes=[np.int32])
+    vval_dig = xr.apply_ufunc(da.digitize, ds_vis.UVW_scaled[:,:,1], uvbins[1], dask='allowed', output_dtypes=[np.int32])
 
     uv_index = xr.concat([uval_dig, vval_dig], 'uvw')
     uv_index = uv_index.transpose('row', 'chan', 'uvw')
 
-    ds_ind = xr.Dataset( data_vars = {'DATA': da_vis, 'UV': uvw_chan[:,:,:2]}, coords = {'U_bins': uval_dig, 'V_bins': vval_dig})
+    ds_ind = xr.Dataset( data_vars = {'DATA': da_vis, 'FLAG': da_flg, 'UV': uvw_chan[:,:,:2]}, coords = {'U_bins': uval_dig.astype(np.int32), 'V_bins': vval_dig.astype(np.int32)})
 
     ds_ind = ds_ind.stack(newrow=['row', 'chan']).transpose('newrow', 'uvw', 'corr')
     ds_ind = ds_ind.drop('ROWID')
@@ -257,6 +258,12 @@ def write_ms_file(msfile, ds_ind, flag_ind_list, field_id, datacolumn="DATA", ch
     [ ] There's probably a more clever/efficient way to do this one.
     """
 
+    # Re-open the MS with daskms
+    ms = xds_from_ms(msfile, columns=[datacolumn, 'UVW', 'FLAG'], group_cols=['FIELD_ID'])
+    ds_ms = ms[field_id]
+    
+    npol = ds_ms.FLAG.data.shape[2]
+
     # Initiate column with all values false then set flagged rows to True
     flag_ind_col = np.zeros((len(ds_ind.newrow)), dtype=bool)
     flag_ind_col[flag_ind_list] = True
@@ -264,8 +271,9 @@ def write_ms_file(msfile, ds_ind, flag_ind_list, field_id, datacolumn="DATA", ch
     # Convert to Dask array and project to all polarisations
     # FIX - take number of pol columns and use here instead of "2"
     da_flag_row = da.from_array(flag_ind_col)
-    da_flag_pol = da.stack([da_flag_row, da_flag_row])
-    da_flag_pol = da_flag_pol.rechunk([2, chunk_size]).T
+    da_flag_pol = da.stack([da_flag_row]*npol)
+    # da_flag_pol = da.stack([da_flag_row, da_flag_row])
+    da_flag_pol = da_flag_pol.rechunk([npol, chunk_size]).T
     
     # Write flag column to ds_ind (from compute_uv_bins.load_ms_file function).
     ds_ind_flag = ds_ind.assign(FLAG=(("newrow", "corr"), da_flag_pol))
@@ -273,11 +281,9 @@ def write_ms_file(msfile, ds_ind, flag_ind_list, field_id, datacolumn="DATA", ch
     # Convert ds_ind back to original format (unstack, transpose)
     ds_ind_flag = ds_ind_flag.unstack().transpose('row', 'chan', 'corr', 'uvw')
     
-    # Re-open the MS with daskms and write flag col to the xarray
-    ms = xds_from_ms(msfile, columns=[datacolumn, 'UVW', 'FLAG'], group_cols=['FIELD_ID'])
-    
-    ms[field_id] = ms[field_id].assign(FLAG=( ("row", "chan", "corr"), ds_ind_flag.FLAG.data ) )
-    ms[field_id] = ms[field_id].unify_chunks()
+    # Write flag col to the xarray    
+    ds_ms = ds_ms.assign(FLAG=( ("row", "chan", "corr"), ds_ind_flag.FLAG.data ) )
+    ds_ms = ds_ms.unify_chunks()
 
     writes = xds_to_table(ms, msfile, ["FLAG"])
     

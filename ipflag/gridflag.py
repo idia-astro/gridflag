@@ -20,7 +20,7 @@ from . import groupby_apply
 
 # def map_grid_function()
 
-def map_amplitude_grid(ds_ind, data_columns, chunk_size:int=10**6, return_index:bool=False):
+def map_amplitude_grid(ds_ind, data_columns, stokes='I', chunk_size:int=10**6, return_index:bool=False):
     """    
     Map functions to a concurrent dask functions to an Xarray dataset with 
     pre-computed grid indicies.
@@ -54,10 +54,14 @@ def map_amplitude_grid(ds_ind, data_columns, chunk_size:int=10**6, return_index:
 
 
     # Get dask arrays of UV-bins and visibilities from XArray dataset
-    dd_ubins = da.from_array(ds_ind.U_bins)
-    dd_vbins = da.from_array(ds_ind.V_bins)
-    dd_vals = da.from_array(np.absolute(ds_ind.DATA[:,data_columns[0]]+ds_ind.DATA[:,data_columns[1]]))
-    dd_flgs = da.from_array(ds_ind.FLAG[:,data_columns[0]] | ds_ind.FLAG[:,data_columns[1]])
+    dd_ubins = ds_ind.U_bins.data
+    dd_vbins = ds_ind.V_bins.data
+    dd_flgs = (ds_ind.FLAG[:,data_columns[0]] | ds_ind.FLAG[:,data_columns[1]]).data
+
+    if stokes=='I':
+        dd_vals = (np.absolute(ds_ind.DATA[:,data_columns[0]]+ds_ind.DATA[:,data_columns[1]])).data
+    elif stokes=='Q':
+        dd_vals = (np.absolute(ds_ind.DATA[:,data_columns[0]] - ds_ind.DATA[:,data_columns[1]])).data
 
     # Combine U and V bins into one dask array
     dd_bins = da.stack([dd_ubins, dd_vbins]).T
@@ -75,7 +79,12 @@ def map_amplitude_grid(ds_ind, data_columns, chunk_size:int=10**6, return_index:
     # Compute indicies for each bin in the grid for each chunk
     group_chunks = [dask.delayed(groupby_apply.group_bin_flagval_wrap)(part[0][0], part[1], part[2]) for part in zip(bin_partitions, val_partitions, flg_partitions)]    
     groups = dask.delayed(groupby_apply.combine_group_flagval)(group_chunks)
+
+#     group_chunks = [dask.delayed(groupby_apply.group_bin_idx_val_wrap)(part[0][0], part[1]) for part in zip(bin_partitions, val_partitions)]    
+#     groups = dask.delayed(groupby_apply.combine_group_idx_val)(group_chunks)
+
     
+    return groups
     
     if return_index:
         # Compute the grid from above without doing the apply step
@@ -85,8 +94,8 @@ def map_amplitude_grid(ds_ind, data_columns, chunk_size:int=10**6, return_index:
 
     else:
         # Apply the function to the grid without explicitly computing the indicies
-        median_grid_ = dask.delayed(groupby_apply.apply_to_groups)(value_groups_, np.median)
-        std_grid_ = dask.delayed(groupby_apply.apply_to_groups)(value_groups_, np.std) 
-        median_grid = median_grid_.compute()
-        std_grid = std_grid_.compute()
+        median_grid = dask.delayed(groupby_apply.apply_to_groups)(value_groups_, np.median)
+        std_grid = dask.delayed(groupby_apply.apply_to_groups)(value_groups_, np.std) 
+#         median_grid = median_grid_.compute()
+#         std_grid = std_grid_.compute()
         return median_grid, std_grid 
