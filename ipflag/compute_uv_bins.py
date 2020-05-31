@@ -33,29 +33,6 @@ def compute_angular_resolution(uvw_chan):
     return ang_res
 
 
-def compute_fov(chan_freq, antennas):
-    '''
-    Calculate the field of view of the antenna, given the
-    observing frequency and antenna diameter.
-    '''
-
-    chan_freq_list = chan_freq.data.compute()
-
-    diameter = np.average([a['diameter'] for a in antennas])
-
-    max_freq, min_freq = chan_freq_list[0][-1], chan_freq_list[0][0]
-    max_lambda = scipy.constants.c/min_freq
-
-    theta = 1.22 * max_lambda/diameter
-    return theta
-
-    #return np.rad2deg(theta)*3600.0 # Convert into arcsec
-
-    #max_beam_size = 1./theta * (180/np.pi)
-    #d_lambda = diameter / max_lambda
-    #max_beam_size = 1/d_lambda * (180/np.pi) * 3600 # Convert to arcseconds
-    #return max_beam_size
-
 
 def list_fields(msmd):
     """Print a list fields in measurement set.
@@ -129,8 +106,10 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
     if not( (method=='statistical') or (method=='physical') ):
         raise ValueError('The \'method\' parameter should be either \'physical\' or \'statistical\'.')
 
-    print('Compute UV Bins')
-    print('---------------')
+    # Print uv-grid information to console
+    title_string = "Compute UV bins"
+    print(f"{title_string:^80}")
+    print('_'*80)
 
     ms = xds_from_ms(msfile, columns=[datacolumn, 'UVW', 'FLAG'], group_cols=['FIELD_ID'], table_keywords=True, column_keywords=True)
 
@@ -141,18 +120,16 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
         list_fields(msmd)
         raise ValueError(f"The fieldid value of {fieldid} is not a valid field in this dataset.")
 
+
     # Get spectral window table information
     spw_table_name = 'SPECTRAL_WINDOW'
     spw_col = 'CHAN_FREQ'
 
-    da_vis = ds_ms[datacolumn]
-    da_flg = ds_ms['FLAG']
-    spw = xds_from_table(f'{msfile}::{spw_table_name}', columns=['NUM_CHAN', spw_col], column_keywords=True)
-    ds_spw, spw_attrs = spw[0][ddid], spw[1]
+    spw = xds_from_table(f'{msfile}::{spw_table_name}', columns=['NUM_CHAN', spw_col], column_keywords=True, group_cols="__row__")
+    ds_spw, spw_attrs = spw[0][0], spw[1]
 
     col_units = spw_attrs['CHAN_FREQ']['QuantumUnits'][0]
-
-    print(f"Selected column {spw_col} from {spw_table_name} with units {col_units}")
+    print(f"Selected column {spw_col} from {spw_table_name} with units {col_units}.")
 
     nchan = int(ds_spw.NUM_CHAN.data.compute()[0])
     nrow = len(ds_ms.ROWID)
@@ -161,33 +138,16 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
     if not len(relfile):
         relfile = os.path.basename(msfile.rstrip('/'))
 
-    #fileparts = msfile.split('/')
-    #if fileparts[-1]:
-    #    relfile = msfile.split('/')[-1]
-    #else:
-    #    relfile = msfile.split('/')[-2]
-
     print(f'Processing dataset {relfile} with {nchan} channels and {nrow} rows.')
 
-    # Create UV values scaled using spectral window frequencies
-    chan_freq = ds_spw.CHAN_FREQ
-    chan_wavelength = scipy.constants.c/chan_freq
+    # Compute the min and max of the unscaled UV coordinates to calculate the grid boundaries
+    bl_limits = [da.min(ds_ms.UVW[:,0]).compute(), da.max(ds_ms.UVW[:,0]).compute(), da.min(ds_ms.UVW[:,1]).compute(), da.max(ds_ms.UVW[:,1]).compute()]
 
-    chan_wavelength = chan_wavelength.squeeze()
-    chan_wavelength = xr.DataArray(chan_wavelength.data, dims=['chan'])
+    # Compute the min and max spectral window channel and convert to wavelength
+    chan_wavelength_lim = np.array([[scipy.constants.c/np.max(spw_.CHAN_FREQ.data.compute()), scipy.constants.c/np.min(spw_.CHAN_FREQ.data.compute())] for spw_ in spw[0]])
 
-    uvw_chan = xr.concat([ds_ms.UVW[:,0] / chan_wavelength, ds_ms.UVW[:,1] / chan_wavelength, ds_ms.UVW[:,2] / chan_wavelength], 'uvw')
-    uvw_chan = uvw_chan.transpose('row', 'chan', 'uvw')
-
-    # Compute UV bins
-    ds_vis = xr.Dataset(data_vars = {'DATA': da_vis, 'UVW_scaled': uvw_chan})
-
-    uval, vval = ds_vis.UVW_scaled[:,:,0], ds_vis.UVW_scaled[:,:,1]
-
-    n = ds_vis.UVW_scaled.shape[0] * ds_vis.UVW_scaled.shape[1] # Total row count
-
-    uvlimit = [[da.min(ds_vis.UVW_scaled[:,:,0]).compute(), da.max(ds_vis.UVW_scaled[:,:,0]).compute()],
-               [da.min(ds_vis.UVW_scaled[:,:,1]).compute(), da.max(ds_vis.UVW_scaled[:,:,1]).compute()]]
+    # Compute the scaled limits of the UV grid by dividing the UV boundaries by the channel boundaries
+    uvlimit = [bl_limits[0]/np.min(chan_wavelength_lim), bl_limits[1]/np.min(chan_wavelength_lim)], [bl_limits[2]/np.min(chan_wavelength_lim), bl_limits[3]/np.min(chan_wavelength_lim)]
 
     if method=='statistical':
         std_k = [float(uval.reduce(np.std)),
@@ -200,40 +160,83 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
                     int((uvlimit[1][1] - uvlimit[1][0])/binwidth[1])]
 
     if method=='physical':
+        '''
+        Calculate the field of view of the antenna, given the
+        observing frequency and antenna diameter.
+        '''
         antennas = msmd.get_antenna_list(verbose=False)
-        #ang_res = compute_angular_resolution(uvw_chan)
 
-        #max_beam_size = compute_fov(chan_freq, antennas)
-        #bincount = max_beam_size / ang_res
+        diameter = np.average([a['diameter'] for a in antennas])
+        max_lambda = np.max(chan_wavelength_lim)
+          
+        fov = 1.22 * max_lambda/diameter
 
-        fov = compute_fov(chan_freq, antennas)
-        binwidth = 1./fov # in lambda
+        binwidth = 1./fov
         binwidth = [int(binwidth), int(binwidth)]
         print(f"The calculated FoV is {np.rad2deg(fov):.2f} deg.")
 
-        #print(f"The calculated resolution of the instrument is {ang_res:.2f} arcseconds and the calculated field of view is {max_beam_size:.1f} arcseconds.")
         bincount = [int(bin_count_factor*(uvlimit[0][1] - uvlimit[0][0])/binwidth[0]),
                     int(bin_count_factor*(uvlimit[1][1] - uvlimit[1][0])/binwidth[1])]
-                    
+                
+
     uvbins = [np.linspace( uvlimit[0][0], uvlimit[0][1], bincount[0] ),
               np.linspace( uvlimit[1][0], uvlimit[1][1], bincount[1] )]
 
-    print(f"Creating a UV-grid with ({bincount[0]}, {bincount[1]}) bins with bin size {binwidth[0]} by {binwidth[1]} lambda.")
 
-    uval_dig = xr.apply_ufunc(da.digitize, ds_vis.UVW_scaled[:,:,0], uvbins[0], dask='allowed', output_dtypes=[np.int32])
-    vval_dig = xr.apply_ufunc(da.digitize, ds_vis.UVW_scaled[:,:,1], uvbins[1], dask='allowed', output_dtypes=[np.int32])
+    # Reload the Main table grouped by DATA_DESC_ID
+    ms = xds_from_ms(msfile, columns=[datacolumn, 'UVW', 'FLAG'], group_cols=['FIELD_ID', 'DATA_DESC_ID'], table_keywords=True, column_keywords=True)
+    ds_ms, ms_attrs = ms[0], ms[1:]
 
-    uv_index = xr.concat([uval_dig, vval_dig], 'uvw')
-    uv_index = uv_index.transpose('row', 'chan', 'uvw')
+    dd = xds_from_table(f"{msfile}::DATA_DESCRIPTION")
+    dd = dd[0].compute()
+    ndd = len(dd.ROWID)
+    nrows = 0
 
-    ds_ind = xr.Dataset( data_vars = {'DATA': da_vis, 'FLAG': da_flg, 'UV': uvw_chan[:,:,:2]}, coords = {'U_bins': uval_dig.astype(np.int32), 'V_bins': vval_dig.astype(np.int32)})
+    # Use the DATA_DESCRIPTION table to process each subset of data (different ddids can have 
+    # a different number of channels). The subsets will be stacked after the channel scaling.
+    ds_bindex = []
 
-    ds_ind = ds_ind.stack(newrow=['row', 'chan']).transpose('newrow', 'uvw', 'corr')
-    ds_ind = ds_ind.drop('ROWID')
-    ds_ind = ds_ind.chunk({'corr': 4, 'uvw': 2, 'newrow': chunksize})
-    ds_ind = ds_ind.unify_chunks()
+    print(f"Creating a UV-grid with ({bincount[0]}, {bincount[1]}) bins with bin size {binwidth[0]:.1f} by {binwidth[1]:.1f} lambda.")
 
-    return ds_ind, uvbins
+    print(f"\nField, Data ID, SPW ID, Channels")
+    
+    for ds_ in ds_ms:
+            fid = ds_.attrs['FIELD_ID']
+            ddid = ds_.attrs['DATA_DESC_ID']
+    
+            if fid != fieldid:
+                print(f"Skipping channel: {fid}.")
+                continue
+
+            spwid = int(dd.SPECTRAL_WINDOW_ID[ddid].data)
+            chan_freq = spw[0][spwid].CHAN_FREQ.data[0]
+            chan_wavelength = scipy.constants.c/chan_freq
+    
+            chan_wavelength = chan_wavelength.squeeze()
+            chan_wavelength = xr.DataArray(chan_wavelength, dims=['chan'])
+    
+            print(f"{fieldid:<5}  {ddid:<7}  {spwid:<6}  {len(chan_freq):<8}")
+        
+            uvw_chan = xr.concat([ds_.UVW[:,0] / chan_wavelength, ds_.UVW[:,1] / chan_wavelength, ds_.UVW[:,2] / chan_wavelength], 'uvw')
+            uvw_chan = uvw_chan.transpose('row', 'chan', 'uvw')
+
+            uval_dig = xr.apply_ufunc(da.digitize, uvw_chan[:,:,0], uvbins[0], dask='allowed', output_dtypes=[np.int32])
+            vval_dig = xr.apply_ufunc(da.digitize, uvw_chan[:,:,1], uvbins[1], dask='allowed', output_dtypes=[np.int32])
+
+            ds_ind = xr.Dataset(data_vars = {'DATA': ds_[datacolumn], 'FLAG': ds_['FLAG'], 'UV': uvw_chan[:,:,:2]}, coords = {'U_bins': uval_dig.astype(np.int32), 'V_bins': vval_dig.astype(np.int32)})
+    
+            ds_ind = ds_ind.stack(newrow=['row', 'chan']).transpose('newrow', 'uvw', 'corr')
+            ds_ind = ds_ind.drop('ROWID')
+            ds_ind = ds_ind.chunk({'corr': 4, 'uvw': 2, 'newrow': chunksize})
+            ds_ind = ds_ind.unify_chunks()
+
+            nrows+=len(ds_ind.row)
+            
+            ds_bindex.append(ds_ind)
+
+    print(f"\nProcessed {ndd} unique data description IDs comprising {nrows} rows.")
+
+    return ds_bindex, uvbins
 
 
 def write_ms_file(msfile, ds_ind, flag_ind_list, field_id, datacolumn="DATA", chunk_size=10**6):
