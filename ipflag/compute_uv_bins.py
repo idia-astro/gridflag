@@ -6,11 +6,12 @@ Use XArray, Dask, and Numpy to load CASA Measurement Set (MS) data and
 create binned UV data.
 
 Todo:
-    [ ] What do we do with existing flags
     [ ] Add uv range parameters
     [ ] Add hermitian folding code (do we need it?)
+    [X] What do we do with existing flags
     [X] Redo gridding based on resolution / fov of data
-    [ ] Fix write function to take pol argument
+    [X] Fix write function to take pol argument
+    [X] Fix write function to handle split-spw files and compliance with MS 2.0
 """
 
 import os
@@ -203,7 +204,7 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
     for ds_ in ds_ms:
             fid = ds_.attrs['FIELD_ID']
             ddid = ds_.attrs['DATA_DESC_ID']
-    
+
             if fid != fieldid:
                 print(f"Skipping channel: {fid}.")
                 continue
@@ -211,12 +212,12 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
             spwid = int(dd.SPECTRAL_WINDOW_ID[ddid].data)
             chan_freq = spw[0][spwid].CHAN_FREQ.data[0]
             chan_wavelength = scipy.constants.c/chan_freq
-    
+
             chan_wavelength = chan_wavelength.squeeze()
             chan_wavelength = xr.DataArray(chan_wavelength, dims=['chan'])
-    
+
             print(f"{fieldid:<5}  {ddid:<7}  {spwid:<6}  {len(chan_freq):<8}")
-        
+
             uvw_chan = xr.concat([ds_.UVW[:,0] / chan_wavelength, ds_.UVW[:,1] / chan_wavelength, ds_.UVW[:,2] / chan_wavelength], 'uvw')
             uvw_chan = uvw_chan.transpose('row', 'chan', 'uvw')
 
@@ -224,7 +225,7 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
             vval_dig = xr.apply_ufunc(da.digitize, uvw_chan[:,:,1], uvbins[1], dask='allowed', output_dtypes=[np.int32])
 
             ds_ind = xr.Dataset(data_vars = {'DATA': ds_[datacolumn], 'FLAG': ds_['FLAG'], 'UV': uvw_chan[:,:,:2]}, coords = {'U_bins': uval_dig.astype(np.int32), 'V_bins': vval_dig.astype(np.int32)})
-    
+
             ds_ind = ds_ind.stack(newrow=['row', 'chan']).transpose('newrow', 'uvw', 'corr')
             ds_ind = ds_ind.drop('ROWID')
             ds_ind = ds_ind.chunk({'corr': 4, 'uvw': 2, 'newrow': chunksize})
@@ -249,46 +250,48 @@ def write_ms_file(msfile, ds_ind, flag_ind_list, field_id, datacolumn="DATA", ch
         Location of the MS file.
     ds_ind: xarray.Dataset
         The contents of the main table of the MS columns DATA and UVW flattened
-        and scaled by wavelength.
+        and scaled by wavelength (from compute_uv_bins.load_ms_file function).
     flag_ind_list : array-like
         One dimensional array with indicies of flagged visibilities.
     field_id : int
         The unique identifier of the field to be flagged.
     chunksize : int
         Size of chunks to be used with Dask.
-        
-    Todo:
-    [ ] There's probably a more clever/efficient way to do this one.
     """
 
-    # Re-open the MS with daskms
-    ms = xds_from_ms(msfile, columns=[datacolumn, 'UVW', 'FLAG'], group_cols=['FIELD_ID'])
-    ds_ms = ms[field_id]
-    
-    npol = ds_ms.FLAG.data.shape[2]
+    ms = xds_from_ms(msfile, columns=[datacolumn, 'UVW', 'FLAG'], group_cols=['FIELD_ID', 'DATA_DESC_ID'])
 
-    # Initiate column with all values false then set flagged rows to True
+    flag_ind_ms = ds_ind.FLAG.data.compute()
+
     flag_ind_col = np.zeros((len(ds_ind.newrow)), dtype=bool)
-    flag_ind_col[flag_ind_list] = True
-    
-    # Convert to Dask array and project to all polarisations
-    # FIX - take number of pol columns and use here instead of "2"
-    da_flag_row = da.from_array(flag_ind_col)
-    da_flag_pol = da.stack([da_flag_row]*npol)
-    # da_flag_pol = da.stack([da_flag_row, da_flag_row])
-    da_flag_pol = da_flag_pol.rechunk([npol, chunk_size]).T
-    
-    # Write flag column to ds_ind (from compute_uv_bins.load_ms_file function).
-    ds_ind_flag = ds_ind.assign(FLAG=(("newrow", "corr"), da_flag_pol))
-    
-    # Convert ds_ind back to original format (unstack, transpose)
-    ds_ind_flag = ds_ind_flag.unstack().transpose('row', 'chan', 'corr', 'uvw')
-    
-    # Write flag col to the xarray    
-    ds_ms = ds_ms.assign(FLAG=( ("row", "chan", "corr"), ds_ind_flag.FLAG.data ) )
-    ds_ms = ds_ms.unify_chunks()
+    flag_ind_col[flag_ind_list] = True    
+
+    for col in data_columns:
+        flag_ind_ms[:,col] = flag_ind_col | flag_ind_ms[:,col]
+
+    da_flag_rows = da.from_array(flag_ind_ms)
+
+    ds_ind_flag = ds_ind.assign(FLAG=(("newrow", "corr"), da_flag_rows))
+
+    print(f"nMS  Field  DDID  nPol  nChan  nRows      Row-span")
+
+    start_row = 0
+
+    for ds_ms in ms:
+        fid = ds_ms.attrs['FIELD_ID']
+        ddid = ds_ms.attrs['DATA_DESC_ID']
+        npol = ds_ms.FLAG.data.shape[2]
+        nrow = len(ds_ms.FLAG)
+        nchan = len(ds_ms.chan)
+        end_row = start_row + nrow*nchan
+
+        print(f"{i_ms:<3}  {fid:<5}  {ddid:<4}  {npol:<4}  {nchan:<5}  {nrow:<9}  {start_row}-{end_row}")
+        ds_iflg = ds_ind_flag.isel(newrow=slice(start_row, end_row)).unstack().transpose('row', 'chan', 'corr', 'uvw')
+        start_row = end_row
+        ds_ms = ds_ms.assign(FLAG=( ("row", "chan", "corr"), ds_iflg.FLAG.data ) )
+        ds_ms = ds_ms.unify_chunks()
+
+        ms[i_ms] = ds_ms
 
     writes = xds_to_table(ms, msfile, ["FLAG"])
-    
-    # Call compute to write to file
     dask.compute(writes)

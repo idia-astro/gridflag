@@ -56,12 +56,12 @@ def map_amplitude_grid(ds_ind, data_columns, stokes='I', chunk_size:int=10**6, r
     # Get dask arrays of UV-bins and visibilities from XArray dataset
     dd_ubins = ds_ind.U_bins.data
     dd_vbins = ds_ind.V_bins.data
-    dd_flgs = (ds_ind.FLAG[:,data_columns[0]] | ds_ind.FLAG[:,data_columns[1]]).data
+    dd_flgs = (ds_ind.FLAG[:,data_columns[0]].data | ds_ind.FLAG[:,data_columns[1]].data)
 
     if stokes=='I':
-        dd_vals = (np.absolute(ds_ind.DATA[:,data_columns[0]]+ds_ind.DATA[:,data_columns[1]])).data
+        dd_vals = (np.absolute(ds_ind.DATA[:,data_columns[0]].data + ds_ind.DATA[:,data_columns[1]].data))
     elif stokes=='Q':
-        dd_vals = (np.absolute(ds_ind.DATA[:,data_columns[0]] - ds_ind.DATA[:,data_columns[1]])).data
+        dd_vals = (np.absolute(ds_ind.DATA[:,data_columns[0]].data - ds_ind.DATA[:,data_columns[1]].data))
 
     # Combine U and V bins into one dask array
     dd_bins = da.stack([dd_ubins, dd_vbins]).T
