@@ -29,15 +29,20 @@ def plot_uv_grid(median_grid, uvbins, annulus_width, bin_max=None):
     # Compute color scale to show median values
     if bin_max==None:
         bin_max = np.median(bin_median_values) + 3.*median_absolute_deviation(bin_median_values)
-    print(f"Bin median{np.median(bin_median_values)} range<{bin_max}")
+    print(f"Grid median (of medians): {np.median(bin_median_values):.3f};  Range: median<{bin_max:0.3f}")
     
     value_colors = [
         "#%02x%02x%02x" % (int(r), int(g), 150) for r, g in zip(50+200*bin_median_values/bin_max, 30+200*bin_median_values/bin_max)
     ]
+
+#     value_colors = [
+#         "#%02x%02x%02x" % (int(r), int(g), 150) for r, g in zip(255*bin_median_values/bin_max, 255-255*bin_median_values/bin_max)
+#     ]
+
     value_colors = np.array(value_colors)
 
     # Erase all bins with no data
-    value_colors[np.where(bin_median_values==0)] = "#FFFFFF"
+    value_colors[np.where(bin_median_values==0)] = "#DADADA"
 
     # Black out all bins with "noise" (this is a naive criteria to detect RMS but it works approximately)
     value_colors[np.where(bin_median_values>bin_max)] = "#000000"

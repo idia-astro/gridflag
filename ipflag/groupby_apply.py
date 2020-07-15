@@ -181,7 +181,7 @@ def group_bin_values_wrap(da_bins, da_vals):
 
 # --- --- --- --- Group all columns in one function --- --- --- ---
 
-def group_bin_flagval_wrap(da_bins, da_vals, da_flags):
+def group_bin_flagval_wrap(da_bins, da_vals, da_flags, init_index=0):
     """
     Wrap the groupby_nd function to parse dask arrays to numpy like.
 
@@ -194,7 +194,7 @@ def group_bin_flagval_wrap(da_bins, da_vals, da_flags):
     """
 
     bins = [da_bins[:,0], da_bins[:,1]]
-    res = groupby_flagval(bins, da_vals, da_flags)
+    res = groupby_flagval(bins, da_vals, da_flags, init_index=init_index)
     return res
 
 
