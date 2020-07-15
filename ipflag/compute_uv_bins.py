@@ -23,6 +23,10 @@ import dask.array as da
 
 import xarray as xr
 from daskms import xds_from_table, xds_from_ms, xds_to_table
+from astropy.coordinates import SkyCoord, EarthLocation
+from astropy.time import Time
+
+import numba as nb
 
 from .listobs_daskms import ListObs as listobs
 
@@ -53,6 +57,87 @@ def list_fields(msmd):
     for i, field in enumerate(field_list):
         name = field['Name']
         print(f"{i:<5} {name:<15} {field_intent[name]}")
+
+
+@nb.jit(nopython=True, nogil=True, cache=True)
+def compute_longest_baseline(baseline_lengths):
+    """
+    Given a list of baseline lengths, compute the largest. The input baseline lengths are
+    with reference to the array centre, so the distance between every pair of antennas
+    needs to be computed.
+    """
+
+    maxbase = 0
+    nant = baseline_lengths.shape[0]
+
+    for mm in range(nant):
+        for nn in range(nant):
+            if mm == nn:
+                continue
+
+            blen = baseline_lengths[mm] - baseline_lengths[nn]
+            blen = np.sqrt(blen[0]**2 + blen[1]**2 + blen[2]**2)
+            if blen > maxbase:
+                maxbase = blen
+
+    return maxbase
+
+
+
+def compute_uv_from_ms(msfile, fieldid, spw):
+    """
+    Compute the maximum UV value from the antenna and source positions.
+    """
+
+    antds = xds_from_table(msfile+'::ANTENNA')
+    pos = antds[0]['POSITION'].compute()
+    # Get the central position of the array
+    meanpos = np.mean(pos, axis=0)
+
+    # Get baseline lengths
+    baseline = pos - meanpos
+    maxbaseline = compute_longest_baseline(baseline.data)
+
+    array_loc = EarthLocation.from_geocentric(x=meanpos[0], y=meanpos[1], z=meanpos[2], unit='m')
+    fds = xds_from_table(msfile + '::FIELD')
+    # Direction of field
+    dirs = fds[0]['DELAY_DIR'].compute()
+    try:
+        dirs = dirs[fieldid][0]
+    except IndexError as e:
+        print(f"Field id {fieldid} does not appear to exist in the MS.")
+        raise
+
+    skydir = SkyCoord(dirs[0], dirs[1], unit='rad')
+    maxfreq = np.amax(spw['CHAN_FREQ'].compute().data)
+
+    msds = xds_from_ms(msfile)
+    time = msds[0]['TIME']
+
+
+    begtime = time[0].compute()/86400
+    endtime = time[-1].compute()/86400
+
+    midtime = (begtime + endtime)/2.
+
+    times = Time([begtime, midtime, endtime], format='mjd', scale='utc')
+    sidereal_time = times.sidereal_time(kind='mean', longitude = array_loc.lon)
+    ha = np.deg2rad((sidereal_time - skydir.ra).deg)
+    dec = np.deg2rad(skydir.dec.deg)
+
+    uvw = []
+    for hh in ha:
+        transform_mat = np.asarray([[np.sin(hh), np.cos(hh), 0],
+                                   [-np.sin(dec)*np.cos(hh), np.sin(dec)*np.sin(hh), np.cos(dec)],
+                                   [np.cos(dec)*np.cos(hh), -np.cos(dec)*np.sin(hh), np.sin(dec)]
+                                  ])
+        uvw.append(np.dot(transform_mat, maxbaseline))
+
+    uvlen = [np.hypot(uv[0], uv[1]) for uv in uvw]
+    lambd = 299792458/maxfreq
+
+    return np.amax(uvlen)/lambd
+
 
 
 def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddid=0, chunksize:int=10**7, bin_count_factor=1):
@@ -141,14 +226,17 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
 
     print(f'Processing dataset {relfile} with {nchan} channels and {nrow} rows.')
 
+    maxuv = compute_uv_from_ms(msfile, fieldid, ds_spw)
+    uvlimit = [0, maxuv, 0, maxuv]
+    print("UV limit is ", uvlimit)
     # Compute the min and max of the unscaled UV coordinates to calculate the grid boundaries
-    bl_limits = [da.min(ds_ms.UVW[:,0]).compute(), da.max(ds_ms.UVW[:,0]).compute(), da.min(ds_ms.UVW[:,1]).compute(), da.max(ds_ms.UVW[:,1]).compute()]
+    #bl_limits = [da.min(ds_ms.UVW[:,0]).compute(), da.max(ds_ms.UVW[:,0]).compute(), da.min(ds_ms.UVW[:,1]).compute(), da.max(ds_ms.UVW[:,1]).compute()]
 
     # Compute the min and max spectral window channel and convert to wavelength
     chan_wavelength_lim = np.array([[scipy.constants.c/np.max(spw_.CHAN_FREQ.data.compute()), scipy.constants.c/np.min(spw_.CHAN_FREQ.data.compute())] for spw_ in spw[0]])
 
     # Compute the scaled limits of the UV grid by dividing the UV boundaries by the channel boundaries
-    uvlimit = [bl_limits[0]/np.min(chan_wavelength_lim), bl_limits[1]/np.min(chan_wavelength_lim)], [bl_limits[2]/np.min(chan_wavelength_lim), bl_limits[3]/np.min(chan_wavelength_lim)]
+    #uvlimit = [bl_limits[0]/np.min(chan_wavelength_lim), bl_limits[1]/np.min(chan_wavelength_lim)], [bl_limits[2]/np.min(chan_wavelength_lim), bl_limits[3]/np.min(chan_wavelength_lim)]
 
     if method=='statistical':
         std_k = [float(uval.reduce(np.std)),
@@ -182,7 +270,6 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
 
     uvbins = [np.linspace( uvlimit[0][0], uvlimit[0][1], bincount[0] ),
               np.linspace( uvlimit[1][0], uvlimit[1][1], bincount[1] )]
-
 
     # Reload the Main table grouped by DATA_DESC_ID
     ms = xds_from_ms(msfile, columns=[datacolumn, 'UVW', 'FLAG'], group_cols=['FIELD_ID', 'DATA_DESC_ID'], table_keywords=True, column_keywords=True)
