@@ -14,7 +14,6 @@ Todo:
 
 import numpy as np
 
-
 def create_bin_groups_sort(uvbins, values):
     
     idx = np.lexsort([ uvbins[:,1], uvbins[:,0]])
@@ -50,7 +49,32 @@ def apply_grid_function(values, grid_row_map, func=np.median):
     return function_grid
 
 
-def combine_grid_partitions(median_chunks):
+def combine_grid_partitions(values_chunks, grid_row_maps, median_grid):
+    """
+    Return two uv-grid data structures where each UV cell contains either a list of values
+    or a list of indicies used to map to the original measurement set.
+    """
+        
+    y_max, x_max = len(median_grid), len(median_grid[0])
+    
+    idx_list_cat = [[[]for j in range(x_max)] for i in range(y_max)]
+    val_list_cat = [[[]for j in range(x_max)] for i in range(y_max)]
+
+    for value_chunk, grid_row_map in zip(value_chunks, grid_row_maps):
+        for i_bin, bin_location in enumerate(grid_row_map[:-1]):
+            u, v = bin_location[:2]
+        
+            istart, iend =  grid_row_map[i_bin][2], grid_row_map[i_bin+1][2]
+        
+            idx_list_cat[u][v] = np.arange(istart, iend)
+            val_list_cat[u][v] = values[istart:iend]
+
+    idx_list_cat, val_list_cat = np.array(idx_list_cat), np.array(val_list_cat)
+
+    return (idx_list_cat, val_list_cat)
+
+
+def combine_function_partitions(median_chunks):
     dim1 = np.max([chunk.shape[0] for chunk in median_chunks])
     dim2 = np.max([chunk.shape[1] for chunk in median_chunks])
     print(dim1, dim2)
