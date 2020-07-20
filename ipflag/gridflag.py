@@ -57,8 +57,10 @@ def map_grid_partition(ds_ind, data_columns, stokes='I', chunk_sizes=[]):
 
     # Load ubins in memory to compute partition (to investigate impact on memory for large datasets)
     ubins = ds_ind.U_bins.data.compute()
+    #ubins = ds_ind.U_bins.data
 
-    p, sp = groupby_partition.binary_partition(ubins, 4)    
+    p = np.zeros_like(ubins)
+    p, sp = groupby_partition.binary_partition(ubins, 4, 0, p)    
 
     # Sort the dataset using the partition permutation
     ds_ind = ds_ind.isel(newrow=p)
@@ -71,8 +73,8 @@ def map_grid_partition(ds_ind, data_columns, stokes='I', chunk_sizes=[]):
     ds_ind = ds_ind.chunk({'newrow':split_chunks})
 
     dd_bins = da.stack([ds_ind.U_bins.data, ds_ind.V_bins.data, da.array(ds_ind.newrow)]).T
-    dd_vals = (np.absolute(ds_ind.DATA[:,data_columns[0]].data + ds_ind.DATA[:,data_columns[1]].data))
-    da_flgs = (ds_ind.FLAG[:,data_columns[0]].data | ds_ind.FLAG[:,data_columns[1]].data)
+    dd_vals = (da.absolute(ds_ind.DATA[:,data_columns[0]].data + ds_ind.DATA[:,data_columns[1]].data))
+    dd_flgs = (ds_ind.FLAG[:,data_columns[0]].data | ds_ind.FLAG[:,data_columns[1]].data)
     
     dd_bins = dd_bins.rechunk((split_chunks, (3)))
     dd_vals = dd_vals.rechunk((split_chunks, (1)))
@@ -85,7 +87,7 @@ def map_grid_partition(ds_ind, data_columns, stokes='I', chunk_sizes=[]):
     function_chunks = [dask.delayed(groupby_partition.apply_grid_function)(c[1], c[2], np.median) for c in group_chunks[:3]]
     median_chunks = dask.delayed(groupby_partition.combine_grid_partitions)(function_chunks)
     median_chunks = median_chunks.compute()
-    median_grid = combine_grid_partitions(median_chunks)
+    median_grid = groupby_partition.combine_grid_partitions(median_chunks)
 
     return median_grid
         

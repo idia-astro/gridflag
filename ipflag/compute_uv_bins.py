@@ -76,9 +76,10 @@ def compute_longest_baseline(baseline_lengths):
                 continue
 
             blen = baseline_lengths[mm] - baseline_lengths[nn]
-            blen = np.sqrt(blen[0]**2 + blen[1]**2 + blen[2]**2)
-            if blen > maxbase:
-                maxbase = blen
+
+            blen2 = np.sqrt(blen[0]**2 + blen[1]**2 + blen[2]**2)
+            if blen2 > maxbase:
+                maxbase = blen2
 
     return maxbase
 
@@ -111,12 +112,12 @@ def compute_uv_from_ms(msfile, fieldid, spw):
     skydir = SkyCoord(dirs[0], dirs[1], unit='rad')
     maxfreq = np.amax(spw['CHAN_FREQ'].compute().data)
 
-    msds = xds_from_ms(msfile)
+    msds = xds_from_ms(msfile, columns=['TIME'], group_cols=['FIELD_ID', 'DATA_DESC_ID'])
     time = msds[0]['TIME']
-
 
     begtime = time[0].compute()/86400
     endtime = time[-1].compute()/86400
+    print(begtime.data, endtime.data)
 
     midtime = (begtime + endtime)/2.
 
@@ -227,7 +228,7 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
     print(f'Processing dataset {relfile} with {nchan} channels and {nrow} rows.')
 
     maxuv = compute_uv_from_ms(msfile, fieldid, ds_spw)
-    uvlimit = [0, maxuv, 0, maxuv]
+    uvlimit = [0, maxuv],[0, maxuv]
     print("UV limit is ", uvlimit)
     # Compute the min and max of the unscaled UV coordinates to calculate the grid boundaries
     #bl_limits = [da.min(ds_ms.UVW[:,0]).compute(), da.max(ds_ms.UVW[:,0]).compute(), da.min(ds_ms.UVW[:,1]).compute(), da.max(ds_ms.UVW[:,1]).compute()]
