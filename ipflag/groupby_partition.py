@@ -17,8 +17,31 @@ import numba as nb
 
 import dask.array as da
 
-def create_bin_groups_sort(uvbins, values):
 
+def create_bin_groups_sort(uvbins, values):
+    """
+    Sort U and V bins for a partition of a dataset such that uv bins are contiguous in the
+    datset. Return sorted data arrays for the bins, indicies, and values and a 
+    corresponding mapping of uv bins to indexical positions in these arrays. Allows for 
+    contiguous and pre-computable memory allocations for the data.
+    
+    Parameters
+    ----------
+    uvbins: dask.array
+        A dask array with three columns: u and v bins and index for one partition.
+    values: dask.array
+        A dask array with visibility values corresponding to the uvbins rows.
+    
+    Returns
+    -------
+    uvbins: np.array
+        A sorted array with u and v bins and indicies.
+    values:
+        A sorted array with values.
+    grid_row_map:
+        A tuple with one row for each unique UV bin pair and its starting index in the 
+        uvbins and values arrays.
+    """
     idx = np.lexsort([ uvbins[:,1], uvbins[:,0]])
     uvbins = uvbins[idx]
     values = values[idx]
@@ -38,8 +61,27 @@ def create_bin_groups_sort(uvbins, values):
     return uvbins, values, grid_row_map
 
 
-@nb.jit(nopython=True, nogil=True, cache=True)
+@nb.jit(nopython=False, nogil=True, cache=True)
 def apply_grid_function(values, grid_row_map, func=np.median):
+    """
+    Apply a function broadcasting across all values in each bin within a given partition. 
+    Operates on the output of the create_bin_groups_sort function.
+    
+    Parameters
+    ----------
+    values : np.array
+        A sorted array with values.
+    grid_row_map : np.array
+        A tuple with one row for each unique UV bin pair and its starting index in the 
+        uvbins and values arrays.
+    func : function
+    
+    Returns
+    -------
+    function_grid : array-like
+        A two dimensional array of uv bins with values of the given function applied to 
+        the bins.
+    """
     function_grid = np.zeros((np.max(grid_row_map[:,0])+1, np.max(grid_row_map[:,1])+1))
     u_prev = 0
 
@@ -54,13 +96,40 @@ def apply_grid_function(values, grid_row_map, func=np.median):
 
 
 @nb.jit(nopython=True, nogil=True, cache=True)
-def combine_grid_partitions(value_chunks, grid_row_maps, median_grid):
+def combine_function_partitions(median_chunks):
+    """
+    Simply combine a set of grid partitions in to a full uv grid.
+    
+    Parameters
+    ----------
+    median_chunks : array-like
+        A set of uv grids each containing values for mutually orthogonal partitions of the 
+        full grid.
+
+    Returns
+    -------
+    function_grid : array-like 
+    """
+    dim1 = np.max([chunk.shape[0] for chunk in median_chunks])
+    dim2 = np.max([chunk.shape[1] for chunk in median_chunks])
+    print(dim1, dim2)
+    function_grid = np.zeros((dim1, dim2))
+    for k, chunk in enumerate(median_chunks):
+        cshape = chunk.shape
+#         print(f"chunk: {k}, {cshape[0]}, {cshape[1]}")
+#         print(function_grid[:cshape[0],:cshape[1]].shape)
+        function_grid[:cshape[0],:cshape[1]] += chunk
+    return function_grid
+
+
+@nb.jit(nopython=True, nogil=True, cache=True)
+def combine_grid_partitions(value_chunks, grid_row_maps, function_grid):
     """
     Return two uv-grid data structures where each UV cell contains either a list of values
     or a list of indicies used to map to the original measurement set.
     """
 
-    y_max, x_max = len(median_grid), len(median_grid[0])
+    y_max, x_max = len(function_grid), len(function_grid[0])
 
     idx_list_cat = [[[]for j in range(x_max)] for i in range(y_max)]
     val_list_cat = [[[]for j in range(x_max)] for i in range(y_max)]
@@ -79,20 +148,7 @@ def combine_grid_partitions(value_chunks, grid_row_maps, median_grid):
     return (idx_list_cat, val_list_cat)
 
 
-def combine_function_partitions(median_chunks):
-    dim1 = np.max([chunk.shape[0] for chunk in median_chunks])
-    dim2 = np.max([chunk.shape[1] for chunk in median_chunks])
-    print(dim1, dim2)
-    median_grid = np.zeros((dim1, dim2))
-    for k, chunk in enumerate(median_chunks):
-        cshape = chunk.shape
-        print(f"chunk: {k}, {cshape[0]}, {cshape[1]}")
-        print(median_grid[:cshape[0],:cshape[1]].shape)
-        median_grid[:cshape[0],:cshape[1]] += chunk
-    return median_grid
-
-
-@nb.jit(nopython=True, nogil=True, cache=True)
+@nb.jit(nopython=False, nogil=True, cache=True)
 def binary_partition(a, binary_chunks, partition_level, p):
     """
     Automatically partition array in to a given number of chunks
@@ -107,11 +163,11 @@ def binary_partition(a, binary_chunks, partition_level, p):
     """
     split_points = []
 
-    a = np.nan_to_num(a)
-    med = np.median(a[a!=0])
-    print("median is ", med)
+#     a = np.nan_to_num(a)
+#     med = np.median(a[a!=0])
+#     print("median is ", med)
 
-    pivot = int(med)
+    pivot = int(np.median(a))
     p, split_point = partition_permutation(a, pivot, p)
 
     partition_level+=1
@@ -122,11 +178,12 @@ def binary_partition(a, binary_chunks, partition_level, p):
 
         p1, sp1 = binary_partition(a[:split_point], binary_chunks, partition_level, p[:split_point])
         p2, sp2 = binary_partition(a[split_point:], binary_chunks, partition_level, p[split_point:])
+        print(len(p), type(p), len(p1), len(p2), type(p1), type(p2))
 
         split_points += sp1
         split_points.append(split_point),
         split_points += [sp+split_point for sp in sp2]
-        p = np.concatenate([p1, p2])
+        p = np.concatenate((p1, p2))
     else:
         split_points.append(split_point)
 
