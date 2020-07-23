@@ -59,8 +59,9 @@ def map_grid_partition(ds_ind, data_columns, stokes='I', chunk_sizes=[]):
     ubins = ds_ind.U_bins.data.compute()
 
     print("Compute parallel partitions and do partial sort.")
-    p = np.zeros_like(ubins)
-    p, sp = groupby_partition.binary_partition(ubins, 4, 0, p)    
+#     p = np.zeros_like(ubins)
+    p = np.arange(len(ubins), dtype=np.int64)
+    p, sp = groupby_partition.binary_partition(ubins, 4, 0, p)
 
     # Sort the dataset using the partition permutation
     ds_ind = ds_ind.isel(newrow=p)
@@ -85,7 +86,7 @@ def map_grid_partition(ds_ind, data_columns, stokes='I', chunk_sizes=[]):
     dd_flgs = dd_flgs.to_delayed()
     
     group_chunks = [dask.delayed(groupby_partition.create_bin_groups_sort)(part[0][0], part[1]) for part in zip(dd_bins, dd_vals)] 
-    function_chunks = [dask.delayed(groupby_partition.apply_grid_function)(c[1], c[2], np.median) for c in group_chunks]
+    function_chunks = [dask.delayed(groupby_partition.apply_grid_function)(c[1], c[2]) for c in group_chunks]
     median_chunks = dask.delayed(groupby_partition.combine_function_partitions)(function_chunks)
 
     print("Compute median grid on the partitions.")    

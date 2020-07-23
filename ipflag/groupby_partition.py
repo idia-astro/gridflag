@@ -14,10 +14,11 @@ Todo:
 
 import numpy as np
 import numba as nb
+from numba import literal_unroll
 
 import dask.array as da
 
-
+@nb.jit(nopython=False, nogil=True, cache=True)
 def create_bin_groups_sort(uvbins, values):
     """
     Sort U and V bins for a partition of a dataset such that uv bins are contiguous in the
@@ -42,14 +43,14 @@ def create_bin_groups_sort(uvbins, values):
         A tuple with one row for each unique UV bin pair and its starting index in the 
         uvbins and values arrays.
     """
-    idx = np.lexsort([ uvbins[:,1], uvbins[:,0]])
+    idx = np.lexsort(np.array([uvbins[:,1], uvbins[:,0]]))  # no numba type for np.lexsort, either use nopython=False or fix lexsort implementation included below 
     uvbins = uvbins[idx]
     values = values[idx]
 
     ubin_prev, vbin_prev = uvbins[0][0], uvbins[0][1]
     grid_row_map = [[ubin_prev, vbin_prev, 0]]
 
-    print(f"init: ({ubin_prev}, {vbin_prev})")
+#     print(f"init: ({ubin_prev}, {vbin_prev})")
 
     for k, row in enumerate(zip(uvbins, values)):
         if ((row[0][0] != ubin_prev) | (row[0][1] != vbin_prev)):
@@ -57,12 +58,12 @@ def create_bin_groups_sort(uvbins, values):
             grid_row_map.append([ubin_prev, vbin_prev, k])
 
     grid_row_map.append([-1, -1, len(uvbins)]) # Add the upper index for the final row
-    grid_row_map = np.array(grid_row_map)
+    grid_row_map = np.array(grid_row_map, dtype=np.int64)
     return uvbins, values, grid_row_map
 
 
-@nb.jit(nopython=False, nogil=True, cache=True)
-def apply_grid_function(values, grid_row_map, func=np.median):
+@nb.jit(nopython=True, nogil=True, cache=True)
+def apply_grid_function(values, grid_row_map):
     """
     Apply a function broadcasting across all values in each bin within a given partition. 
     Operates on the output of the create_bin_groups_sort function.
@@ -82,7 +83,7 @@ def apply_grid_function(values, grid_row_map, func=np.median):
         A two dimensional array of uv bins with values of the given function applied to 
         the bins.
     """
-    function_grid = np.zeros((np.max(grid_row_map[:,0])+1, np.max(grid_row_map[:,1])+1))
+    function_grid = np.zeros(((np.max(grid_row_map[:,0])+1), (np.max(grid_row_map[:,1])+1)))
     u_prev = 0
 
     print('Applying function to grid_map.')
@@ -90,7 +91,7 @@ def apply_grid_function(values, grid_row_map, func=np.median):
         u, v = bin_location[:2]
         istart, iend =  grid_row_map[i_bin][2], grid_row_map[i_bin+1][2]
 
-        function_grid[u][v] = func(values[istart:iend])
+        function_grid[u][v] = np.median(values[istart:iend])
 
     return function_grid
 
@@ -110,8 +111,8 @@ def combine_function_partitions(median_chunks):
     -------
     function_grid : array-like 
     """
-    dim1 = np.max([chunk.shape[0] for chunk in median_chunks])
-    dim2 = np.max([chunk.shape[1] for chunk in median_chunks])
+    dim1 = np.max(np.array([chunk.shape[0] for chunk in median_chunks], dtype=np.int32))
+    dim2 = np.max(np.array([chunk.shape[1] for chunk in median_chunks], dtype=np.int32))
     print(dim1, dim2)
     function_grid = np.zeros((dim1, dim2))
     for k, chunk in enumerate(median_chunks):
@@ -148,7 +149,23 @@ def combine_grid_partitions(value_chunks, grid_row_maps, function_grid):
     return (idx_list_cat, val_list_cat)
 
 
-@nb.jit(nopython=False, nogil=True, cache=True)
+# ---------------------------------------------------------------------------------
+
+
+@nb.jit(nopython=True, nogil=True, cache=True)
+def partition_permutation(a, pivot, p):
+    # workaround to get numba working for empty lists
+
+    i = 0
+    for j in range(len(a)):
+        if a[j] <= pivot:
+            p[i], p[j] = p[j], p[i]
+            a[i], a[j] = a[j], a[i]
+            i += 1
+    return p, i
+
+
+@nb.jit(nopython=True, nogil=True, cache=True)
 def binary_partition(a, binary_chunks, partition_level, p):
     """
     Automatically partition array in to a given number of chunks
@@ -158,8 +175,13 @@ def binary_partition(a, binary_chunks, partition_level, p):
     binary_chunks : int
         The the desired number of chunks given as a power of two, so for 16 chunks set binary_chunks=4 or
         binary_chunks = log(chunks).
+    partition_level : int
+        The current partition level for recursion. Should be set to zero, but no default 
+        value is set due to numba.
     p : array-like
-        The permutation array to be returned and used to sort the original dataset.
+        The permutation array to be returned and used to sort the original dataset. Should 
+        be set to a contiguous integer index array with length a, e.g. p = 
+        np.arange(len(a), dtype=np.int64).
     """
     split_points = []
 
@@ -172,13 +194,13 @@ def binary_partition(a, binary_chunks, partition_level, p):
 
     partition_level+=1
 
-    print(partition_level, binary_chunks, pivot, split_point)
+#     print(partition_level, binary_chunks, pivot, split_point)
 
     if partition_level < binary_chunks:
 
         p1, sp1 = binary_partition(a[:split_point], binary_chunks, partition_level, p[:split_point])
         p2, sp2 = binary_partition(a[split_point:], binary_chunks, partition_level, p[split_point:])
-        print(len(p), type(p), len(p1), len(p2), type(p1), type(p2))
+#         print(len(p), type(p), len(p1), len(p2), type(p1), type(p2))
 
         split_points += sp1
         split_points.append(split_point),
@@ -188,6 +210,70 @@ def binary_partition(a, binary_chunks, partition_level, p):
         split_points.append(split_point)
 
     return p, split_points
+
+# ---------------------------------------------------------------------------------
+
+
+@nb.jit
+def cmp_fn(l, r, *arrays):
+    for a in literal_unroll(arrays):
+        if a[l] < a[r]:
+            return -1  # less than
+        elif a[l] > a[r]:
+            return 1   # greater than
+
+    return 0  # equal
+
+
+@nb.jit
+def quicksort(index, L, R, *arrays):
+    l, r = L, R
+    pivot = index[(l + r) // 2]
+
+    while True:
+        while l < R and cmp_fn(index[l], pivot, *arrays) == -1:
+            l += 1
+        while r >= L and cmp_fn(pivot, index[r], *arrays) == -1:
+            r -= 1
+
+        if l >= r:
+            break
+
+        index[l], index[r] = index[r], index[l]
+        l += 1
+        r -= 1
+
+        if L < r:
+            quicksort(index, L, r, *arrays)
+
+        if l < R:
+            quicksort(index, l, R, *arrays)
+
+
+@nb.jit(nogil=True, cache=True, debug=True)
+def lexsort(arrays):
+    print("starting lexsort")
+
+    if len(arrays) == 0:
+        return np.empty((), dtype=np.intp)
+
+    if len(arrays) == 1:
+        return np.argsort(arrays[0])
+
+    for a in literal_unroll(arrays[1:]):
+        if a.shape != arrays[0].shape:
+            raise ValueError("lexsort array shapes don't match")
+
+    n = arrays[0].shape[0]
+    index = np.arange(n)
+
+    quicksort(index, 0, n - 1, *arrays)
+
+    print("ending lexsort")
+    return index
+
+
+# ---------------------------------------------------------------------------------
 
 
 def dict_apply_grid_function(values, grid_row_map, func=np.median):
@@ -253,17 +339,6 @@ def partition(a, pivot):
             i += 1
     return i
 
-@nb.jit(nopython=True, nogil=True, cache=True)
-def partition_permutation(a, pivot, p):
-    # workaround to get numba working for empty lists
-
-    i = 0
-    for j in range(len(a)):
-        if a[j] <= pivot:
-            p[i], p[j] = p[j], p[i]
-            a[i], a[j] = a[j], a[i]
-            i += 1
-    return p, i
 
 def binary_tree_chunk(a, p, chunks, k_chunks=1, split_points=[], init_index=0):
     # change to median of medians or empirical estimate of median (from baseline distribution, etc)
