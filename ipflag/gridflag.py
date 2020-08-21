@@ -15,10 +15,10 @@ import numpy as np
 import dask
 import dask.array as da
 
-from . import groupby_apply, groupby_partition
+from . import groupby_apply, groupby_partition, annulus_stats
 
 
-def map_grid_partition(ds_ind, data_columns, stokes='I', chunk_sizes=[]):
+def map_grid_partition(ds_ind, data_columns, uvbins, stokes='I', chunk_sizes=[]):
     """
     Partition the dataset in to orthogonal chunks of uv-bins on which to perform parallel
     operations.
@@ -87,10 +87,19 @@ def map_grid_partition(ds_ind, data_columns, stokes='I', chunk_sizes=[]):
     
     group_chunks = [dask.delayed(groupby_partition.create_bin_groups_sort)(part[0][0], part[1]) for part in zip(dd_bins, dd_vals)] 
     function_chunks = [dask.delayed(groupby_partition.apply_grid_function)(c[1], c[2]) for c in group_chunks]
-    median_chunks = dask.delayed(groupby_partition.combine_function_partitions)(function_chunks)
+    median_grid = dask.delayed(groupby_partition.combine_function_partitions)(function_chunks)
+    
+    annulus_width = dask.delayed(annulus_stats.compute_annulus_bins)(median_grid, uvbins, 10)
+    annuli_data = dask.delayed(annulus_stats.process_annuli)(median_grid, annulus_width, uvbins, sigma=3.)
+    
+    flag_results = [dask.delayed(annulus_stats.flag_one_annulus)(c[0], c[1], c[2], annuli_data[0], annuli_data[1]) for c in group_chunks]
+
+    results = dask.delayed(groupby_partition.combine_annulus_results)([fr[0] for fr in flag_results], [fr[1] for fr in flag_results])
 
     print("Compute median grid on the partitions.")    
-    median_chunks = median_chunks.compute()
+
+    return results
+    median_chunks = results.compute()
     return ds_ind, median_chunks
         
 

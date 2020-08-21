@@ -175,3 +175,71 @@ def compute_annulus_stats(median_grid, value_groups, index_groups, uvbins, annul
     flag_ind_list = np.concatenate(flag_ind_list)
 
     return median_grid_flg, value_groups_flg, flag_ind_list
+    
+    
+# ----------------------------------------------------------------------------------------
+
+
+def process_annuli(median_grid, annulus_width, uvbins, sigma=3.):    
+
+    annuli_grid = -1*np.ones(median_grid.shape, dtype=np.int32)
+    
+    uv_bins = np.asarray(median_grid>0).nonzero()
+    uv_bins = np.array([uv_bins[0], uv_bins[1]])
+    
+    bin_uv_dist = np.sqrt(uvbins[0][uv_bins[0]-1]**2 + uvbins[1][uv_bins[1]-1]**2)
+    
+    annuli_limits = []
+    
+    for ind, edge in enumerate(annulus_width):
+            minuv=0
+            if ind:
+                minuv = annulus_width[ind-1]
+            maxuv = annulus_width[ind]
+
+            ann_bin_index = np.where((bin_uv_dist > minuv) & (bin_uv_dist < maxuv))[0]
+            ann_bin_names = np.array([(x-1,y-1) for x,y in zip(uv_bins[:,ann_bin_index][0], uv_bins[:,ann_bin_index][1])])
+            
+            print(f"Annulus {ind} - ({minuv:<8.1f}- {maxuv:<8.1f}): {len(ann_bin_names)}")
+            
+            ann_bin_median = np.array([median_grid[u][v] for (u,v) in ann_bin_names])
+
+            ci_lower, ci_upper = get_annulus_limits(ann_bin_median, sigma)
+
+            print(f"\t med: {np.median(ann_bin_median):.2f} limits: {ci_lower:.2f} - {ci_upper:.2f}")
+
+            for (u,v) in ann_bin_names:
+                annuli_grid[u][v] = ind
+
+            annuli_limits.append([ci_lower, ci_upper])
+    
+    annuli_limits = np.array(annuli_limits)
+            
+    return annuli_limits, annuli_grid
+
+
+def flag_one_annulus(uvbin_group, value_group, grid_row_map, annuli_limits, annuli_grid):
+    
+    median_grid_flg = np.zeros(annuli_grid.shape)
+    flag_list = []
+    
+    for i_bin, (u,v,idx) in enumerate(grid_row_map[:-1]):
+        
+        istart, iend =  grid_row_map[i_bin][2], grid_row_map[i_bin+1][2]
+        bin_val = value_group[istart:iend]
+        bin_ind = uvbin_group[istart:iend,2]
+        
+        (ci_lower, ci_upper) = annuli_limits[annuli_grid[u][v]]
+        
+        bin_thresholds = compute_bin_threshold(bin_val, (ci_lower, ci_upper))
+        
+        bin_flg = bin_ind[np.where((bin_val<=bin_thresholds[0]) | (bin_val>=bin_thresholds[1]))]
+        bin_val = bin_val[np.where((bin_val>bin_thresholds[0]) & (bin_val<bin_thresholds[1]))] 
+
+        median_grid_flg[u][v] = np.median(bin_val)
+        if len(bin_flg):
+            flag_list.append(bin_flg)
+        
+    flag_list = np.concatenate(flag_list)
+    return median_grid_flg, flag_list
+    

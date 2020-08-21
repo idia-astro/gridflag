@@ -227,17 +227,20 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
 
     print(f'Processing dataset {relfile} with {nchan} channels and {nrow} rows.')
 
-    maxuv = compute_uv_from_ms(msfile, fieldid, ds_spw)
-    uvlimit = [0, maxuv],[0, maxuv]
-    print("UV limit is ", uvlimit)
+#     maxuv = compute_uv_from_ms(msfile, fieldid, ds_spw)
+#     uvlimit = [0, maxuv],[0, maxuv]
+#     print("UV limit is ", uvlimit)
     # Compute the min and max of the unscaled UV coordinates to calculate the grid boundaries
-    #bl_limits = [da.min(ds_ms.UVW[:,0]).compute(), da.max(ds_ms.UVW[:,0]).compute(), da.min(ds_ms.UVW[:,1]).compute(), da.max(ds_ms.UVW[:,1]).compute()]
+    bl_limits = [da.min(ds_ms.UVW[:,0]).compute(), da.max(ds_ms.UVW[:,0]).compute(), da.min(ds_ms.UVW[:,1]).compute(), da.max(ds_ms.UVW[:,1]).compute()]
 
     # Compute the min and max spectral window channel and convert to wavelength
     chan_wavelength_lim = np.array([[scipy.constants.c/np.max(spw_.CHAN_FREQ.data.compute()), scipy.constants.c/np.min(spw_.CHAN_FREQ.data.compute())] for spw_ in spw[0]])
 
     # Compute the scaled limits of the UV grid by dividing the UV boundaries by the channel boundaries
-    #uvlimit = [bl_limits[0]/np.min(chan_wavelength_lim), bl_limits[1]/np.min(chan_wavelength_lim)], [bl_limits[2]/np.min(chan_wavelength_lim), bl_limits[3]/np.min(chan_wavelength_lim)]
+    uvlimit = [bl_limits[0]/np.min(chan_wavelength_lim), bl_limits[1]/np.min(chan_wavelength_lim)], [bl_limits[2]/np.min(chan_wavelength_lim), bl_limits[3]/np.min(chan_wavelength_lim)]
+
+    print(f"UV limit is {uvlimit[0][0]:.2f} - {uvlimit[0][1]:.2f}, {uvlimit[1][0]:.2f} - {uvlimit[1][1]:.2f}")
+
 
     if method=='statistical':
         std_k = [float(uval.reduce(np.std)),
