@@ -98,9 +98,9 @@ def map_grid_partition(ds_ind, data_columns, uvbins, stokes='I', chunk_sizes=[])
 
     print("Compute median grid on the partitions.")    
 
-    return results
-    median_chunks = results.compute()
-    return ds_ind, median_chunks
+#     return results
+    flag_list, median_grid = results.compute()
+    return ds_ind, flag_list, median_grid
         
 
 def map_amplitude_grid(ds_ind, data_columns, stokes='I', chunk_size:int=10**6, return_index:bool=False):
