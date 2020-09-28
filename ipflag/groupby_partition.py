@@ -17,6 +17,9 @@ import numba as nb
 from numba import literal_unroll
 
 import dask.array as da
+import xarray as xr
+
+from dask.array.core import slices_from_chunks
 
 @nb.jit(nopython=False, nogil=True, cache=True)
 def create_bin_groups_sort(uvbins, values):
@@ -241,6 +244,7 @@ def partition_permutation(a, pivot, p):
     return p, i
 
 
+
 @nb.jit(nopython=True, nogil=True, cache=True)
 def binary_partition(a, binary_chunks, partition_level, p):
     """
@@ -263,10 +267,13 @@ def binary_partition(a, binary_chunks, partition_level, p):
 
 #     a = np.nan_to_num(a)
 #     med = np.median(a[a!=0])
-#     print("median is ", med)
 
     pivot = int(np.median(a))
+#     print("median pivot and partition level:", pivot, partition_level)
+
     p, split_point = partition_permutation(a, pivot, p)
+
+#     print("partition length \t split point", len(p), split_point)
 
     partition_level+=1
 
@@ -286,8 +293,148 @@ def binary_partition(a, binary_chunks, partition_level, p):
         split_points.append(split_point)
 
     return p, split_points
+    
+    
+
+@nb.jit(nopython=True, nogil=True, cache=True)
+def partition_permutation_2d(a, b, pivot, p, v):
+    # workaround to get numba working for empty lists
+
+    i = 0
+    for j in range(len(a)):
+        if a[j] <= pivot:
+            p[i], p[j] = p[j], p[i]
+            a[i], a[j] = a[j], a[i]
+            b[i], b[j] = b[j], b[i]
+            v[i], v[j] = v[j], v[i]
+            i += 1
+    return p, i
+
+    
+@nb.jit(nopython=True, nogil=True, cache=True)
+def binary_partition_2d(a, b, binary_chunks, partition_level, p, v):
+    """
+    Automatically partition array in to a given number of chunks
+
+    a : array-like
+        The input array, will be sorted in-place.
+    binary_chunks : int
+        The the desired number of chunks given as a power of two, so for 16 chunks set binary_chunks=4 or
+        binary_chunks = log(chunks).
+    partition_level : int
+        The current partition level for recursion. Should be set to zero, but no default 
+        value is set due to numba.
+    p : array-like
+        The permutation array to be returned and used to sort the original dataset. Should 
+        be set to a contiguous integer index array with length a, e.g. p = 
+        np.arange(len(a), dtype=np.int64).
+    """
+    split_points = []
+
+#     a = np.nan_to_num(a)
+#     med = np.median(a[a!=0])
+
+    pivot = int(np.median(a))
+    print("Partition level:", partition_level)
+
+    if pivot == max(a):
+        pivot-=1
+    if pivot == min(a):
+        pivot+=1
+        
+    p, split_point = partition_permutation_2d(a, b, pivot, p, v)
+
+    print("\tpivot, partition min/max", pivot, split_point, min(a), max(a))
+
+#     print("\tpartition length \t split point", len(p), split_point, len(a), min(a), max(a), min(b), max(b))
+#     print("\t", min(a[:split_point]), max(a[:split_point]), min(a[split_point:]), max(a[split_point:]), "\t", min(b[:split_point]), max(b[:split_point]), min(b[split_point:]), max(b[split_point:]))
+
+    partition_level+=1
+    
+    if partition_level < binary_chunks:
+        p1, sp1 = binary_partition_2d(b[:split_point], a[:split_point], binary_chunks, partition_level, p[:split_point], v[:split_point])
+        p2, sp2 = binary_partition_2d(b[split_point:], a[split_point:], binary_chunks, partition_level, p[split_point:], v[split_point:])
+
+        split_points += sp1
+        split_points.append(split_point),
+        split_points += [sp+split_point for sp in sp2]
+        p = np.concatenate((p1, p2))
+
+    else:
+        split_points.append(split_point)
+
+    return p, split_points
 
 # ---------------------------------------------------------------------------------
+
+# @nb.jit(nopython=True, nogil=True, cache=True)
+def apply_partition_chunk(p, sp, ds_ind): #p, 
+    """
+    Apply permutation index to XArray datset by first applying chunk-by-chunk, then shuffling the
+    chunks. Theoretically, this reduces the number of dask tasks, getitem/concatination operations.
+    
+    
+    Notes:
+        Some logic from https://github.com/dask/dask/pull/3901/files
+    """
+    
+    chunks = ds_ind.U_bins.chunks    
+    slices = slices_from_chunks(chunks)
+    print(chunks)
+    
+    offsets = np.roll(np.cumsum(chunks[0]), 1)
+    offsets[0] = 0
+    
+    
+    print("Compute chunk-pivot matrix.")
+    # Compute pivot points per Chunk matrix
+    pivot_chunks = []
+    p_chunk = []
+    for slice_, offset in zip(slices, offsets):
+        chunksize = slice_[0].stop - slice_[0].start
+        print(slice_, offset, chunksize)
+        p_chunk.append(p[(slice_[0].start<=p)&(slice_[0].stop>p)])
+        sp_chunks = []
+        for sp_ in zip([0]+sp[:-1],sp):
+            pc = p[sp_[0]:sp_[1]]
+            sp_c = len(pc[(slice_[0].start<=pc)&(pc<slice_[0].stop)])
+            sp_chunks.append(sp_c)
+#             print("\t", sp_, len(pc), sp_c)
+        sp_l = [0] + list(np.cumsum(sp_chunks)) + [chunksize]
+        pivot_chunks.append(sp_l)
+    
+    pivot_chunks = np.array(pivot_chunks)
+
+    print("Create chunked permutation index.")
+    # Re-parse the permutation index to do in-chunk permutations
+#     p_chunk = np.concatenate([p[(slice_[0].start<=p)&(slice_[0].stop>p)] for slice_ in slices])
+    p_chunk = np.concatenate(p_chunk)
+
+    print("Reindex the datset")
+
+    ds_ind = ds_ind.isel(newrow=p_chunk)
+
+    del(p_chunk)
+    print("Re-order and re-chunk the dataset.")
+    new_chunks = []
+    for chunk_pivots in zip(pivot_chunks.T[:-1], pivot_chunks.T[1:]):
+        ds_chk = xr.concat([ds_ind.isel(newrow=slice(offset+a,offset+b,None)) for offset,a,b in zip(offsets, chunk_pivots[0], chunk_pivots[1])], 'newrow')
+        ds_chk = ds_chk.chunk({'newrow':len(ds_chk.newrow)})
+        new_chunks.append(ds_chk)
+
+    ds_ind = xr.concat(new_chunks, 'newrow')
+
+    print("Set chunk sizes to partition sizes.")
+    del(new_chunks)
+    split_chunks = [0] + sp + [len(ds_ind.newrow)]
+    split_chunks = tuple(np.diff(split_chunks))
+    ds_ind = ds_ind.chunk({'newrow':split_chunks})
+    
+    return ds_ind
+
+# ---------------------------------------------------------------------------------
+
+
 
 
 @nb.jit

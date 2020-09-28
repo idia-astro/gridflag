@@ -331,7 +331,7 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
     return ds_bindex, uvbins
 
 
-def write_ms_file(msfile, ds_ind, flag_ind_list, field_id, datacolumn="DATA", chunk_size=10**6):
+def write_ms_file(msfile, ds_ind, flag_ind_list, fieldid, data_columns, overwrite=False, datacolumn="DATA", chunk_size=10**6):
     """ Convert flags to the correct format and write flag column to a 
     measurement set (MS).
 
@@ -344,22 +344,30 @@ def write_ms_file(msfile, ds_ind, flag_ind_list, field_id, datacolumn="DATA", ch
         and scaled by wavelength (from compute_uv_bins.load_ms_file function).
     flag_ind_list : array-like
         One dimensional array with indicies of flagged visibilities.
-    field_id : int
+    fieldid : int
         The unique identifier of the field to be flagged.
     chunksize : int
         Size of chunks to be used with Dask.
     """
 
+    print("Load ms file for writing.")
     ms = xds_from_ms(msfile, columns=[datacolumn, 'UVW', 'FLAG'], group_cols=['FIELD_ID', 'DATA_DESC_ID'])
 
+    print("Load existing flags.")
     flag_ind_ms = ds_ind.FLAG.data.compute()
 
+    print("Create empty flag column.")
     flag_ind_col = np.zeros((len(ds_ind.newrow)), dtype=bool)
     flag_ind_col[flag_ind_list] = True    
 
+    print("Rearange and combine flags for pol states and cols.")
     for col in data_columns:
-        flag_ind_ms[:,col] = flag_ind_col | flag_ind_ms[:,col]
+        if overwrite:
+            flag_ind_ms[:,col] = flag_ind_col
+        else:
+            flag_ind_ms[:,col] = flag_ind_col | flag_ind_ms[:,col]
 
+    print("Done with that.")
     da_flag_rows = da.from_array(flag_ind_ms)
 
     ds_ind_flag = ds_ind.assign(FLAG=(("newrow", "corr"), da_flag_rows))
@@ -368,8 +376,11 @@ def write_ms_file(msfile, ds_ind, flag_ind_list, field_id, datacolumn="DATA", ch
 
     start_row = 0
 
-    for ds_ms in ms:
+    for i_ms, ds_ms in enumerate(ms):
         fid = ds_ms.attrs['FIELD_ID']
+        if not(fieldid==fid):
+            print("skipping field {}".format(fid))
+            continue
         ddid = ds_ms.attrs['DATA_DESC_ID']
         npol = ds_ms.FLAG.data.shape[2]
         nrow = len(ds_ms.FLAG)
@@ -384,5 +395,6 @@ def write_ms_file(msfile, ds_ind, flag_ind_list, field_id, datacolumn="DATA", ch
 
         ms[i_ms] = ds_ms
 
+    print("Saving to file.")
     writes = xds_to_table(ms, msfile, ["FLAG"])
     dask.compute(writes)
