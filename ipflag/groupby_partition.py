@@ -50,8 +50,12 @@ def create_bin_groups_sort(uvbins, values):
     uvbins = uvbins[idx]
     values = values[idx]
     
+    
     # Remove rows with zero values (and return flag indicies if requested)
-    print("Zero values removed: {:.2f}%".format(100*len(np.where(values==0)[0])/float(len(values))))
+#     print("Zero values removed: {:.2f}%".format(100*len(np.where(values==0)[0])/float(len(values))))
+    null_flags = uvbins[np.where(values==0)]
+    print("Zero values removed: {:.2f}%".format(100*len(null_flags)/float(len(values))))
+
     uvbins = uvbins[np.where(values!=0)]
     values = values[np.where(values!=0)]
 
@@ -82,11 +86,11 @@ def create_bin_groups_sort(uvbins, values):
 
     grid_row_map.append([-1, -1, len(uvbins)]) # Add the upper index for the final row
     grid_row_map = np.array(grid_row_map, dtype=np.int64)
-    return uvbins, values, grid_row_map
+    return uvbins, values, grid_row_map, null_flags[:,2]
 
 
 @nb.jit(nopython=True, nogil=True, cache=True)
-def apply_grid_function(values, grid_row_map):
+def apply_grid_median(values, grid_row_map):
     """
     Apply a function broadcasting across all values in each bin within a given partition. 
     Operates on the output of the create_bin_groups_sort function.
@@ -115,6 +119,39 @@ def apply_grid_function(values, grid_row_map):
         istart, iend =  grid_row_map[i_bin][2], grid_row_map[i_bin+1][2]
 
         function_grid[u][v] = np.median(values[istart:iend])
+
+    return function_grid
+
+
+def apply_grid_function(values, grid_row_map, function):
+    """
+    Apply a function broadcasting across all values in each bin within a given partition. 
+    Operates on the output of the create_bin_groups_sort function.
+    
+    Parameters
+    ----------
+    values : np.array
+        A sorted array with values.
+    grid_row_map : np.array
+        A tuple with one row for each unique UV bin pair and its starting index in the 
+        uvbins and values arrays.
+    func : function
+    
+    Returns
+    -------
+    function_grid : array-like
+        A two dimensional array of uv bins with values of the given function applied to 
+        the bins.
+    """
+    function_grid = np.zeros(((np.max(grid_row_map[:,0])+1), (np.max(grid_row_map[:,1])+1)))
+    u_prev = 0
+
+    print('Applying function to grid_map.')
+    for i_bin, bin_location in enumerate(grid_row_map[:-1]):
+        u, v = bin_location[:2]
+        istart, iend =  grid_row_map[i_bin][2], grid_row_map[i_bin+1][2]
+
+        function_grid[u][v] = function(values[istart:iend])
 
     return function_grid
 
@@ -296,22 +333,26 @@ def binary_partition(a, binary_chunks, partition_level, p):
     
     
 
-@nb.jit(nopython=True, nogil=True, cache=True)
-def partition_permutation_2d(a, b, pivot, p, v):
-    # workaround to get numba working for empty lists
-
+    
+@nb.jit(nopython=False, nogil=True, cache=True)
+def partition_permutation_2d(a, b, v, p, pivot):
+    # workaround to get numba working for empty lists    
+    a = np.copy(a)
+    b = np.copy(b)
+    v = np.copy(v)
+    p = np.copy(p)
     i = 0
     for j in range(len(a)):
         if a[j] <= pivot:
-            p[i], p[j] = p[j], p[i]
             a[i], a[j] = a[j], a[i]
             b[i], b[j] = b[j], b[i]
             v[i], v[j] = v[j], v[i]
+            p[i], p[j] = p[j], p[i]
             i += 1
-    return p, i
+    return i, a, b, v, p
 
     
-@nb.jit(nopython=True, nogil=True, cache=True)
+@nb.jit(nopython=False, nogil=True, cache=True)
 def binary_partition_2d(a, b, binary_chunks, partition_level, p, v):
     """
     Automatically partition array in to a given number of chunks
@@ -331,9 +372,6 @@ def binary_partition_2d(a, b, binary_chunks, partition_level, p, v):
     """
     split_points = []
 
-#     a = np.nan_to_num(a)
-#     med = np.median(a[a!=0])
-
     pivot = int(np.median(a))
     print("Partition level:", partition_level)
 
@@ -342,12 +380,9 @@ def binary_partition_2d(a, b, binary_chunks, partition_level, p, v):
     if pivot == min(a):
         pivot+=1
         
-    p, split_point = partition_permutation_2d(a, b, pivot, p, v)
+    a, b, v, p, split_point = partition_permutation_2d(a, b, pivot, p, v)
 
     print("\tpivot, partition min/max", pivot, split_point, min(a), max(a))
-
-#     print("\tpartition length \t split point", len(p), split_point, len(a), min(a), max(a), min(b), max(b))
-#     print("\t", min(a[:split_point]), max(a[:split_point]), min(a[split_point:]), max(a[split_point:]), "\t", min(b[:split_point]), max(b[:split_point]), min(b[split_point:]), max(b[split_point:]))
 
     partition_level+=1
     
@@ -364,6 +399,24 @@ def binary_partition_2d(a, b, binary_chunks, partition_level, p, v):
         split_points.append(split_point)
 
     return p, split_points
+
+
+def process_bin_partitions(ds_ind, sort_data):
+    sp = sort_data[4]
+    
+    split_chunks = [0] + sp + [len(ds_ind.newrow)]
+    split_chunks = tuple(np.diff(split_chunks))
+    
+    dd_bins = da.stack([sort_data[0], sort_data[1], sort_data[3]]).T
+    dd_vals = da.from_array(sort_data[2])
+    
+    dd_bins = dd_bins.rechunk((split_chunks, (3)))
+    dd_vals = dd_vals.rechunk((split_chunks, (1)))
+
+    dd_bins = dd_bins.to_delayed()
+    dd_vals = dd_vals.to_delayed()
+    
+    return dd_bins, dd_vals
 
 # ---------------------------------------------------------------------------------
 

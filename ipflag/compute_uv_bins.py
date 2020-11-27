@@ -220,6 +220,7 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
 
     nchan = int(ds_spw.NUM_CHAN.data.compute()[0])
     nrow = len(ds_ms.ROWID)
+    ncorr = len(ds_ms.corr)
 
     relfile = os.path.basename(msfile)
     if not len(relfile):
@@ -315,14 +316,26 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
             uval_dig = xr.apply_ufunc(da.digitize, uvw_chan[:,:,0], uvbins[0], dask='allowed', output_dtypes=[np.int32])
             vval_dig = xr.apply_ufunc(da.digitize, uvw_chan[:,:,1], uvbins[1], dask='allowed', output_dtypes=[np.int32])
 
-            ds_ind = xr.Dataset(data_vars = {'DATA': ds_[datacolumn], 'FLAG': ds_['FLAG'], 'UV': uvw_chan[:,:,:2]}, coords = {'U_bins': uval_dig.astype(np.int32), 'V_bins': vval_dig.astype(np.int32)})
+#             ds_ind = xr.Dataset(data_vars = {'DATA': ds_[datacolumn], 'FLAG': ds_['FLAG'], 'UV': uvw_chan[:,:,:2]}, coords = {'U_bins': uval_dig.astype(np.int32), 'V_bins': vval_dig.astype(np.int32)})
+# 
+#             return ds_ind
+# 
+#             ds_ind = ds_ind.stack(newrow=['row', 'chan']).transpose('newrow', 'uvw', 'corr')
+#             ds_ind = ds_ind.drop('ROWID')
+#             ds_ind = ds_ind.chunk({'corr': 4, 'uvw': 2, 'newrow': chunksize})
+#             ds_ind = ds_ind.unify_chunks()
 
-            ds_ind = ds_ind.stack(newrow=['row', 'chan']).transpose('newrow', 'uvw', 'corr')
-            ds_ind = ds_ind.drop('ROWID')
-            ds_ind = ds_ind.chunk({'corr': 4, 'uvw': 2, 'newrow': chunksize})
+            # Avoid calling xray.dataset.stack, as it leads to an intense multi-index shuffle 
+            # that does not seem to be dask-backed and runs on the scheduler.
+
+            da_data = ds_.DATA.data.reshape(-1, ncorr)
+            da_flag = ds_.FLAG.data.reshape(-1, ncorr)
+
+            ds_ind = xr.Dataset(data_vars = {'DATA': (("newrow", "corr"), da_data), 'FLAG': (("newrow", "corr"), da_flag)}, coords = {'U_bins': (("newrow"), uval_dig.data.ravel()), 'V_bins': (("newrow"), vval_dig.data.ravel())})
+            ds_ind = ds_ind.chunk({'corr': ncorr, 'newrow': chunksize})
             ds_ind = ds_ind.unify_chunks()
 
-            nrows+=len(ds_ind.row)
+            nrows+=len(ds_ind.newrow)
             
             ds_bindex.append(ds_ind)
 
