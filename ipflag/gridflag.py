@@ -108,13 +108,16 @@ def dask_partition_sort(a, b, v, p, chunks, binary_chunks, partition_level, clie
 
     results = [partition_permutation(a_, b_, v_, p_, pivot) for a_, b_, v_, p_ in zip(a, b, v, p)]
 
-    print(f"Partition Level {partition_level}, medians: {[a_.compute()[0] for a_ in umed]}, pivot: {pivot}")
+    print(f"Partition Level {partition_level}, nmedians: {len(umed)}, pivot: {pivot}")
 
     # Bring split point to local process
     sp0 = [r[0] for r in results]
-    sp0 = np.array([sp.compute() for sp in sp0])
+    sp0 = client.compute(sp0)
+    sp0 = [r.result() for r in sp0]
+#     sp0 = np.array([sp.compute() for sp in sp0])
 
-    print(f"\t Split points: {sp0}")
+
+    print(f"\t Split points (ave): {np.mean(sp0)}")
     
     # Gather futures of sorted data from the partition function
     a = [r[1] for r in results]
