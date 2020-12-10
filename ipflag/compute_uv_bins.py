@@ -344,7 +344,7 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
     return ds_bindex, uvbins
 
 
-def write_ms_file(msfile, ds_ind, flag_ind_list, fieldid, data_columns, overwrite=False, datacolumn="DATA", chunk_size=10**6):
+def write_ms_file(msfile, ds_ind, flag_ind_list, fieldid, data_columns, overwrite=False, datacolumn="DATA", chunk_size=10**6, client=None):
     """ Convert flags to the correct format and write flag column to a 
     measurement set (MS).
 
@@ -382,7 +382,6 @@ def write_ms_file(msfile, ds_ind, flag_ind_list, fieldid, data_columns, overwrit
 
     print("Done with that.")
     da_flag_rows = da.from_array(flag_ind_ms)
-
     ds_ind_flag = ds_ind.assign(FLAG=(("newrow", "corr"), da_flag_rows))
 
     print(f"nMS  Field  DDID  nPol  nChan  nRows      Row-span")
@@ -401,13 +400,16 @@ def write_ms_file(msfile, ds_ind, flag_ind_list, fieldid, data_columns, overwrit
         end_row = start_row + nrow*nchan
 
         print(f"{i_ms:<3}  {fid:<5}  {ddid:<4}  {npol:<4}  {nchan:<5}  {nrow:<9}  {start_row}-{end_row}")
-        ds_iflg = ds_ind_flag.isel(newrow=slice(start_row, end_row)).unstack().transpose('row', 'chan', 'corr', 'uvw')
+        ds_iflg = ds_ind_flag.isel(newrow=slice(start_row, end_row)).FLAG.data.reshape(nrow, nchan, npol)
         start_row = end_row
-        ds_ms = ds_ms.assign(FLAG=( ("row", "chan", "corr"), ds_iflg.FLAG.data ) )
+        ds_ms = ds_ms.assign(FLAG=( ("row", "chan", "corr"), ds_iflg ) )
         ds_ms = ds_ms.unify_chunks()
 
         ms[i_ms] = ds_ms
 
     print("Saving to file.")
     writes = xds_to_table(ms, msfile, ["FLAG"])
-    dask.compute(writes)
+    if client:
+        client.compute(writes)
+    else:
+        dask.compute(writes)
