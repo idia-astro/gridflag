@@ -14,6 +14,7 @@ import numpy as np
 
 import dask
 import dask.array as da
+import numba as nb
 
 from . import groupby_apply, groupby_partition, annulus_stats
 
@@ -22,6 +23,7 @@ def map_grid_partition_slurm(ds_ind, data_columns, uvbins, sigma=2.5, partition_
     # Load data from dask-ms dastaset
     ubins = ds_ind.U_bins.data
     vbins = ds_ind.V_bins.data
+    # Determine which polarization state to grid and flag
     vals = (da.absolute(ds_ind.DATA[:,data_columns[0]].data + ds_ind.DATA[:,data_columns[1]].data))
 
     #Comute chunks
@@ -53,24 +55,43 @@ def map_grid_partition_slurm(ds_ind, data_columns, uvbins, sigma=2.5, partition_
     flag_results = [dask.delayed(annulus_stats.flag_one_annulus)(c[0], c[1], c[2], c[3], annuli_data[0], annuli_data[1]) for c in group_chunks]
     results = dask.delayed(groupby_partition.combine_annulus_results)([fr[0] for fr in flag_results], [fr[1] for fr in flag_results])
 
-    print("Compute median grid on the partitions.")    
-    flag_list, median_grid = results.compute()
+    print("Compute median grid on the partitions.")  
+
+    if client:
+        flag_list, median_grid = client.compute(results)
+    else:
+        flag_list, median_grid = results.compute()
 
     return flag_list, median_grid
 
 
+@nb.jit
+def median_of_medians(data, sublist_length=11):
+    # Compute median of medians on each chunk
+    data = np.array([np.median(k) for k in [data[j:(j + sublist_length)] for j in range(0,len(data),sublist_length)]])
+    return data
+
+@nb.jit
+def apply_median_func(data, depth):
+    for i in range(depth):
+        data = median_of_medians(data)
+    return data
+
 
 def da_median(a):
     m = np.median(a)
+#     m = da.mean(a)
     return np.array(m)[None,None] # add dummy dimensions
     
 def combine_median(meds):
-    return np.median(meds)
+    umed_list = np.concatenate(meds)
+    print(f"umeds: {len(umed_list)}")
+    return np.median(umed_list)
 
 combine_median = dask.delayed(combine_median)
 partition_permutation = dask.delayed(groupby_partition.partition_permutation_2d)
 da_median = dask.delayed(da_median)
-
+apply_median_func = dask.delayed(apply_median_func)
 
 # Latest Version
 def dask_partition_sort(a, b, v, p, chunks, binary_chunks, partition_level, client=None):
@@ -98,8 +119,21 @@ def dask_partition_sort(a, b, v, p, chunks, binary_chunks, partition_level, clie
     p = p.to_delayed()
     
     # Compute the median-of-medians heuristic (not the proper definition of MoM but we only need an approximate pivot)
-    umed = [da_median(a_)[0] for a_ in a]
-    pivot = combine_median(umed).compute()
+    #    umed = [da_median(a_)[0] for a_ in a]
+    resid = 50
+    sublist_length=11
+    min_nrow = np.min(chunks)
+
+    med_depth = np.int32(np.floor((np.log(min_nrow/resid)/np.log(sublist_length))))
+
+    umed = [apply_median_func(a_, med_depth) for a_ in a]
+
+    umeds = [len(u.compute()) for u in umed]
+    if client:
+        pivot = combine_median(umed)
+        pivot = client.compute(pivot)
+    else:
+        pivot = combine_median(umed).compute()
 
     if pivot == a_max:
         pivot-=0.5
@@ -108,13 +142,15 @@ def dask_partition_sort(a, b, v, p, chunks, binary_chunks, partition_level, clie
 
     results = [partition_permutation(a_, b_, v_, p_, pivot) for a_, b_, v_, p_ in zip(a, b, v, p)]
 
-    print(f"Partition Level {partition_level}, nmedians: {len(umed)}, pivot: {pivot}")
+    print(f"Partition Level {partition_level}, med_depth: {med_depth}, nmedians: {umeds}, pivot: {pivot}")
 
     # Bring split point to local process
     sp0 = [r[0] for r in results]
-    sp0 = client.compute(sp0)
-    sp0 = [r.result() for r in sp0]
-#     sp0 = np.array([sp.compute() for sp in sp0])
+    if client:
+        sp0 = client.compute(sp0)
+        sp0 = [r.result() for r in sp0]
+    else:
+        sp0 = np.array([sp.compute() for sp in sp0])
 
 
     print(f"\t Split points (ave): {np.mean(sp0)}")
