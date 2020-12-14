@@ -18,13 +18,49 @@ import numba as nb
 
 from . import groupby_apply, groupby_partition, annulus_stats
 
-def map_grid_partition_slurm(ds_ind, data_columns, uvbins, sigma=2.5, partition_level=4, stokes='I', chunk_sizes=[], client=None):
+def map_grid_partition(ds_ind, data_columns, uvbins, sigma=2.5, partition_level=4, stokes='I', client=None):
+    """    
+    Map functions to a concurrent dask functions to an Xarray dataset with 
+    pre-computed grid indicies.
+
+    Parameters
+    ----------
+    ds_ind : xarray.dataset
+        An xarray datset imported from a measurement set. It must contain 
+        coordinates U_bins and V_bins, and relevant data and position 
+        variables.
+    data_columns : list
+        Components for Stokes terms to be used to compute amplitude. Depends 
+        on dataset.
+    uvbins : list
+        List of two arrays, each containing the bounds for the discrete U and V bins  
+        in the ds_ind dataset.
+    sigma : float
+        Depth of flagging - corresponds to the significance of a particular observation to 
+        be labeled RFI.
+    partition_level : int
+        Internal parameter used to split the dataset in to congruent chunks in the uv-bin
+        space. Used for concurrency.
+
+    Returns
+    -------
+    flag_list: numpy.array
+        A list of flag indicies to be applied to the original measurement set.
+    median_grid : numpy.array
+        A two-dimensional array representing a uv-grid. Each cell in the grid 
+        is the median of all values, after zero removal and flagging, in that bin.     """
 
     # Load data from dask-ms dastaset
     ubins = ds_ind.U_bins.data
     vbins = ds_ind.V_bins.data
+
     # Determine which polarization state to grid and flag
-    vals = (da.absolute(ds_ind.DATA[:,data_columns[0]].data + ds_ind.DATA[:,data_columns[1]].data))
+    if stokes=='I':
+        vals = (da.absolute(ds_ind.DATA[:,data_columns[0]].data + ds_ind.DATA[:,data_columns[1]].data))
+    elif stokes=='Q':
+        vals = (da.absolute(ds_ind.DATA[:,data_columns[0]].data - ds_ind.DATA[:,data_columns[1]].data))
+    else:
+        raise ValueError(f"map_grid_partition: the stokes argument, '{stokes}', is not currently implemented, please select another value.")
 
     #Comute chunks
     chunks = list(ubins.chunks[0])
@@ -58,7 +94,7 @@ def map_grid_partition_slurm(ds_ind, data_columns, uvbins, sigma=2.5, partition_
     print("Compute median grid on the partitions.")  
 
     if client:
-        flag_list, median_grid = client.compute(results)
+        flag_list, median_grid = client.compute(results).result()
     else:
         flag_list, median_grid = results.compute()
 
@@ -142,7 +178,7 @@ def dask_partition_sort(a, b, v, p, chunks, binary_chunks, partition_level, clie
 
     results = [partition_permutation(a_, b_, v_, p_, pivot) for a_, b_, v_, p_ in zip(a, b, v, p)]
 
-    print(f"Partition Level {partition_level}, med_depth: {med_depth}, nmedians: {umeds}, pivot: {pivot}")
+    print(f"Partition Level {partition_level}, med_depth: {med_depth}, pivot: {pivot.result()}")
 
     # Bring split point to local process
     sp0 = [r[0] for r in results]
@@ -153,7 +189,7 @@ def dask_partition_sort(a, b, v, p, chunks, binary_chunks, partition_level, clie
         sp0 = np.array([sp.compute() for sp in sp0])
 
 
-    print(f"\t Split points (ave): {np.mean(sp0)}")
+    print(f"\t Split points (ave): {np.mean(sp0):.1f}")
     
     # Gather futures of sorted data from the partition function
     a = [r[1] for r in results]
@@ -227,262 +263,50 @@ def dask_partition_sort(a, b, v, p, chunks, binary_chunks, partition_level, clie
         split_points = np.concatenate((a1.chunks, a2.chunks), axis=None)
 
     return split_points, a, b, v, p
-    
-    
-
-def map_grid_partition(ds_ind, data_columns, uvbins, sigma=2.5, partition_level=4, stokes='I', chunk_sizes=[]):
-    """
-    Partition the dataset in to orthogonal chunks of uv-bins on which to perform parallel
-    operations.
-    
-    Parameters
-    ----------
-    ds_ind : xarray.dataset
-        An xarray datset imported from a measurement set. It must contain 
-        coordinates U_bins and V_bins, and relevant data and position 
-        variables.
-    data_columns : list
-        Components for Stokes terms to be used to compute amplitude. Depends 
-        on dataset.
-    chunk_size : int
-        The chunk size for computing split-apply functions in dask, Default is
-        empty. If empty, chunks will be computed automatically via partitioning.
-        
-    Returns
-    -------
-    value_rows : numpy.array
-        Values of each visibility sorted by uv-bins. For UV bins see grid_row_map.
-    index_rows : numpy.array
-        Indicies of each visibility corresponding to the position in the original 
-        Measurement Set, sorted by uv-bins. For UV bins see grid_row_map.
-    function_groups : array-like
-        A two-dimensional array with the value of a function applied to the values in each 
-        uv-cell. 
-    grid_row_map : array-like
-        A list of each partition, each partition contains a list, whose rows represent
-        a map for a UV bin to it's start row in value_rows, and index_rows.
-    """
-#     ds_ind.coords['index'] = (('newrow'), da.arange(len(ds_ind.newrow)))
-#     ds_ind = ds_ind.set_index({'newrow': 'index'})
 
 
-    # ---- ---- Full Dask ---- -----
-    # Set new contiguous index after unfolding
-
-    # Re-chunk to only one chunk for partition math
-    ds_ind = ds_ind.chunk({'newrow': len(ds_ind.newrow)})
-
-    nrows = len(ds_ind.newrow)
-    p = np.arange(nrows, dtype=np.int64)
-    p = da.from_array(p)
-
-    # Amplitude calculation
-    vals = (da.absolute(ds_ind.DATA[:,data_columns[0]].data + ds_ind.DATA[:,data_columns[1]].data))
-    dd_ubins = ds_ind.U_bins.data
-    dd_vbins = ds_ind.V_bins.data
-
-    print(f"Run partition function on {nrows} rows.")    
-    binary_partition = dask.delayed(groupby_partition.binary_partition_2d)
-    sort_data = binary_partition(dd_ubins, dd_vbins, partition_level, 0, p, vals)
-
-    process_bin_partitions = dask.delayed(groupby_partition.process_bin_partitions)
-    bin_data = process_bin_partitions(ds_ind, sort_data)
-
-    dd_bins, dd_vals = bin_data[0], bin_data[1]
-
-    print("Set up bin grouping.")
-    group_chunks = [dask.delayed(groupby_partition.create_bin_groups_sort)(part[0][0], part[1]) for part in zip(dd_bins, dd_vals)] 
-    function_chunks = [dask.delayed(groupby_partition.apply_grid_median)(c[1], c[2]) for c in group_chunks]
-    median_grid = dask.delayed(groupby_partition.combine_function_partitions)(function_chunks)
-    
-    annulus_width = dask.delayed(annulus_stats.compute_annulus_bins)(median_grid, uvbins, 10)
-
-    print(f"Initiate flagging with sigma = {sigma}.")
-    annuli_data = dask.delayed(annulus_stats.process_annuli)(median_grid, annulus_width, uvbins, sigma=sigma)
-    
-    flag_results = [dask.delayed(annulus_stats.flag_one_annulus)(c[0], c[1], c[2], c[3], annuli_data[0], annuli_data[1]) for c in group_chunks]
-
-    results = dask.delayed(groupby_partition.combine_annulus_results)([fr[0] for fr in flag_results], [fr[1] for fr in flag_results])
-
-    print("Compute median grid on the partitions.")    
-
-#     return results
-    flag_list, median_grid = results.compute()
-    
-    #Note: It may not be necessary to return ds_ind in this function
-    return flag_list, median_grid
-
-
-    # ----- ----- ----- -----
-
-
-
-    print("Load in-memory data for sort.")
-    ubins = ds_ind.U_bins.data.compute()
-    vbins = ds_ind.V_bins.data.compute()    
-    vals = np.array(da.absolute(ds_ind.DATA[:,data_columns[0]].data + ds_ind.DATA[:,data_columns[1]].data))
-    p = np.arange(len(ubins), dtype=np.int64)
-
-    print("Compute parallel partitions and do partial sort.")
-    p, sp = groupby_partition.binary_partition_2d(ubins, vbins, partition_level, 0, p, vals)
-    
-    split_chunks = [0] + sp + [len(ds_ind.newrow)]
-    split_chunks = tuple(np.diff(split_chunks))
-    
-    print("Preparing dask delayed...")
-    dd_bins = da.stack([da.from_array(ubins), da.from_array(vbins), da.array(p)]).T
-    dd_vals = da.from_array(vals)
-    
-    dd_bins = dd_bins.rechunk((split_chunks, (3)))
-    dd_vals = dd_vals.rechunk((split_chunks, (1)))
-    
-    dd_bins = dd_bins.to_delayed()
-    dd_vals = dd_vals.to_delayed()
-    
-    del ubins, vbins, p, vals
-    
-    group_chunks = [dask.delayed(groupby_partition.create_bin_groups_sort)(part[0][0], part[1]) for part in zip(dd_bins, dd_vals)] 
-    function_chunks = [dask.delayed(groupby_partition.apply_grid_median)(c[1], c[2]) for c in group_chunks]
-    median_grid = dask.delayed(groupby_partition.combine_function_partitions)(function_chunks)
-    
-    annulus_width = dask.delayed(annulus_stats.compute_annulus_bins)(median_grid, uvbins, 10)
-
-    print(f"Initiate flagging with sigma = {sigma}.")
-    annuli_data = dask.delayed(annulus_stats.process_annuli)(median_grid, annulus_width, uvbins, sigma=sigma)
-    
-    flag_results = [dask.delayed(annulus_stats.flag_one_annulus)(c[0], c[1], c[2], c[3], annuli_data[0], annuli_data[1]) for c in group_chunks]
-
-    results = dask.delayed(groupby_partition.combine_annulus_results)([fr[0] for fr in flag_results], [fr[1] for fr in flag_results])
-
-    print("Compute median grid on the partitions.")    
-
-#     return results
-    flag_list, median_grid = results.compute()
-    
-    #Note: It may not be necessary to return ds_ind in this function
-    return flag_list, median_grid
-
-
-def compute_median_grid(ds_ind, data_columns, uvbins, sigma=2.5, partition_level=4, stokes='I', chunk_sizes=[], client=None):
+def compute_median_grid(ds_ind, data_columns, uvbins, partition_level=4, stokes='I', client=None):
 
     print("Load in-memory data for sort.")
     ubins = ds_ind.U_bins.data
-    vbins = ds_ind.V_bins.data    
-    vals = da.absolute(ds_ind.DATA[:,data_columns[0]].data + ds_ind.DATA[:,data_columns[1]].data)
-    p = np.arange(len(ds_ind.newrow), dtype=np.int64, chunks=ubins.chunks)
+    vbins = ds_ind.V_bins.data
+
+    if stokes=='I':
+        vals = (da.absolute(ds_ind.DATA[:,data_columns[0]].data + ds_ind.DATA[:,data_columns[1]].data))
+    elif stokes=='Q':
+        vals = (da.absolute(ds_ind.DATA[:,data_columns[0]].data - ds_ind.DATA[:,data_columns[1]].data))
+    else:
+        raise ValueError(f"compute_median_grid: the stokes argument, '{stokes}', is not currently implemented, please select another value.")
+
+    #Comute chunks
+    chunks = list(ubins.chunks[0])
+
+    # The array 'p' is used to map flags back to the original file order
+    p = da.arange(len(ds_ind.newrow), dtype=np.int64, chunks=ubins.chunks)
 
     print("Compute parallel partitions and do partial sort.")
-#     p, sp = groupby_partition.binary_partition_2d(ubins, vbins, partition_level, 0, p, vals)
-    split_points, ubins, vbins, vals, p = gridflag.dask_partition_sort(ubins, vbins, vals, p, chunks, partition_level, 0, client=client)
+    split_points, ubins_, vbins_, vals_, p_ = dask_partition_sort(ubins, vbins, vals, p, chunks, partition_level, 0, client=client)
         
     print("Preparing dask delayed...")
-    dd_bins = da.stack([ubins, vbins, p]).T
-    dd_bins = dd_bins.rechunk((ubins.chunks[0], 3))
-        
+    dd_bins = da.stack([ubins_, vbins_, p_]).T
+    dd_bins = dd_bins.rechunk((ubins_.chunks[0], 3))
+
     dd_bins = dd_bins.to_delayed()
-    dd_vals = vals_.to_delayed()    
+    dd_vals = vals_.to_delayed()
 
-    del ubins, vbins, p, vals
+    del ubins, vbins, vals, p
 
+    print("Compute UV map and median grid.")
     group_chunks = [dask.delayed(groupby_partition.create_bin_groups_sort)(part[0][0], part[1]) for part in zip(dd_bins, dd_vals)] 
     function_chunks = [dask.delayed(groupby_partition.apply_grid_median)(c[1], c[2]) for c in group_chunks]
     median_grid = dask.delayed(groupby_partition.combine_function_partitions)(function_chunks)
 
-    return median_grid.compute()
+    if client:
+        median_grid = client.compute(median_grid).result()
+    else:
+        median_grid = median_grid.compute()
 
-
-def map_grid_partition_old(ds_ind, data_columns, uvbins, stokes='I', chunk_sizes=[]):
-    """
-    Partition the dataset in to orthogonal chunks of uv-bins on which to perform parallel
-    operations.
-    
-    Parameters
-    ----------
-    ds_ind : xarray.dataset
-        An xarray datset imported from a measurement set. It must contain 
-        coordinates U_bins and V_bins, and relevant data and position 
-        variables.
-    data_columns : list
-        Components for Stokes terms to be used to compute amplitude. Depends 
-        on dataset.
-    chunk_size : int
-        The chunk size for computing split-apply functions in dask, Default is
-        empty. If empty, chunks will be computed automatically via partitioning.
-        
-    Returns
-    -------
-    value_rows : numpy.array
-        Values of each visibility sorted by uv-bins. For UV bins see grid_row_map.
-    index_rows : numpy.array
-        Indicies of each visibility corresponding to the position in the original 
-        Measurement Set, sorted by uv-bins. For UV bins see grid_row_map.
-    function_groups : array-like
-        A two-dimensional array with the value of a function applied to the values in each 
-        uv-cell. 
-    grid_row_map : array-like
-        A list of each partition, each partition contains a list, whose rows represent
-        a map for a UV bin to it's start row in value_rows, and index_rows.
-    """
-
-    # Set new contiguous index after unfolding
-    ds_ind.coords['index'] = (('newrow'), da.arange(len(ds_ind.newrow)))
-    
-    row_stack = ds_ind.newrow.drop(['U_bins', 'V_bins'])
-    ds_ind = ds_ind.set_index({'newrow': 'index'})    
-
-    ds_ind = ds_ind.chunk({'newrow':len(ds_ind.newrow)})
-
-    # Load ubins in memory to compute partition (to investigate impact on memory for large datasets)
-    ubins = ds_ind.U_bins.data.compute()
-
-    print("Compute parallel partitions and do partial sort.")
-#     p = np.zeros_like(ubins)
-    p = np.arange(len(ubins), dtype=np.int64)
-    p, sp = groupby_partition.binary_partition(ubins, 4, 0, p)
-
-    # Sort the dataset using the partition permutation
-    ds_ind = ds_ind.isel(newrow=p)
-    ds_ind = ds_ind.unify_chunks()
-
-    # Convert from chunk start-index list to a list of chunk sizes
-    split_chunks = [0] + sp + [len(ds_ind.newrow)]
-    split_chunks = tuple(np.diff(split_chunks))
-    
-    ds_ind = ds_ind.chunk({'newrow':split_chunks})
-
-    print("Preparing dask delayed...")
-    dd_bins = da.stack([ds_ind.U_bins.data, ds_ind.V_bins.data, da.array(ds_ind.newrow)]).T
-    dd_vals = (da.absolute(ds_ind.DATA[:,data_columns[0]].data + ds_ind.DATA[:,data_columns[1]].data))
-    dd_flgs = (ds_ind.FLAG[:,data_columns[0]].data | ds_ind.FLAG[:,data_columns[1]].data)
-    
-    # Chunk the second dimension together
-    dd_bins = dd_bins.rechunk((split_chunks, (3)))
-
-    # Not necessary because rechunk on dataset is done above
-    #dd_vals = dd_vals.rechunk((split_chunks, (1)))
-    
-    dd_bins = dd_bins.to_delayed()
-    dd_vals = dd_vals.to_delayed()
-    dd_flgs = dd_flgs.to_delayed()
-    
-    group_chunks = [dask.delayed(groupby_partition.create_bin_groups_sort)(part[0][0], part[1]) for part in zip(dd_bins, dd_vals)] 
-    function_chunks = [dask.delayed(groupby_partition.apply_grid_median)(c[1], c[2]) for c in group_chunks]
-    median_grid = dask.delayed(groupby_partition.combine_function_partitions)(function_chunks)
-    
-    annulus_width = dask.delayed(annulus_stats.compute_annulus_bins)(median_grid, uvbins, 10)
-    annuli_data = dask.delayed(annulus_stats.process_annuli)(median_grid, annulus_width, uvbins, sigma=3.)
-    
-    flag_results = [dask.delayed(annulus_stats.flag_one_annulus)(c[0], c[1], c[2], annuli_data[0], annuli_data[1]) for c in group_chunks]
-
-    results = dask.delayed(groupby_partition.combine_annulus_results)([fr[0] for fr in flag_results], [fr[1] for fr in flag_results])
-
-    print("Compute median grid on the partitions.")    
-
-#     return results
-    flag_list, median_grid = results.compute()
-    
-    #Note: It may not be necessary to return ds_ind in this function
-    return ds_ind, flag_list, median_grid, row_stack
+    return median_grid
         
 
 def map_amplitude_grid(ds_ind, data_columns, stokes='I', chunk_size:int=10**6, return_index:bool=False):
