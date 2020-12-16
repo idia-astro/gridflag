@@ -91,7 +91,7 @@ def map_grid_partition(ds_ind, data_columns, uvbins, sigma=2.5, partition_level=
     flag_results = [dask.delayed(annulus_stats.flag_one_annulus)(c[0], c[1], c[2], c[3], annuli_data[0], annuli_data[1]) for c in group_chunks]
     results = dask.delayed(groupby_partition.combine_annulus_results)([fr[0] for fr in flag_results], [fr[1] for fr in flag_results])
 
-    print("Compute median grid on the partitions.")  
+    print("Compute median grid on the partitions.")
 
     if client:
         flag_list, median_grid = client.compute(results).result()
@@ -169,7 +169,7 @@ def dask_partition_sort(a, b, v, p, chunks, binary_chunks, partition_level, clie
         pivot = combine_median(umed)
         pivot = client.compute(pivot)
     else:
-        pivot = combine_median(umed).compute()
+        pivot = combine_median(umed).compute().result()
 
     if pivot == a_max:
         pivot-=0.5
@@ -178,7 +178,7 @@ def dask_partition_sort(a, b, v, p, chunks, binary_chunks, partition_level, clie
 
     results = [partition_permutation(a_, b_, v_, p_, pivot) for a_, b_, v_, p_ in zip(a, b, v, p)]
 
-    print(f"Partition Level {partition_level}, med_depth: {med_depth}, pivot: {pivot.result()}")
+    print(f"Partition Level {partition_level}, med_depth: {med_depth}, pivot: {pivot}")
 
     # Bring split point to local process
     sp0 = [r[0] for r in results]
