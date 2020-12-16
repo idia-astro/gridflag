@@ -1,10 +1,7 @@
 import numpy as np
 from scipy.stats import median_absolute_deviation, sigmaclip
 
-from .plotgrid import get_fixed_thresholds, get_rayleigh_thresholds
-
 length_checker = np.vectorize(len) 
-
 
 def compute_bin_threshold(bin_val, annulus_threshold, alpha=None):
     
@@ -42,6 +39,85 @@ def get_annulus_limits(ann_bin_median, sigma):
     ci_lower, ci_upper = np.exp(log_limits[0] - sigma*log_limits[1]), np.exp(log_limits[0] + sigma*log_limits[1])
 
     return ci_lower, ci_upper
+
+
+def get_fixed_thresholds(bin_median, alpha=None, sigma=None):
+    """
+    Get thresholds based on a Rayleigh distribution without fitting. Since there 
+    is only one parameter, the median of the bin alone can be used to set the 
+    shape and scale.
+    
+    parameters
+    ----------
+    bin_medians - array-like
+        Median values for each measurement in a bin
+    alpha - float
+        The cumulative distribution function is alpha/2 at the lower threshold, and 
+        1-alpha/2 for the upper threshold (either alpha or sigma is required).
+    sigma - int
+        Level for two-sided confidence interval. Only integer values 1-5 are 
+        accepted.
+    """
+    
+    if (alpha==None and sigma==None):
+        raise Exception("Please set either alpha of sigma.")
+    
+    if sigma:
+        if not(type(sigma==int)):
+            raise Exception("The value of sigma must be an integer less than 6.")
+        if sigma==1:
+            alpha=0.31731051
+        elif sigma==2:
+            alpha=0.04550026
+        elif sigma==3:
+            alpha=0.00269980
+        elif sigma==4:
+            alpha=0.00006334
+        elif sigma==5:
+            alpha=0.00000057        
+            
+    # Determine the single parameter of the Rayleigh distribution from the 
+    # median (https://en.wikipedia.org/wiki/Rayleigh_distribution).
+    sigma_r = bin_median/np.sqrt(2*np.log(2))
+    
+    lthreshold = sigma_r*np.sqrt(-2*np.log(1-alpha/2))
+    uthreshold = sigma_r*np.sqrt(-2*np.log(alpha/2))
+    
+    return lthreshold, uthreshold
+
+
+def get_rayleigh_thresholds(vals, alpha=0.045):
+    '''
+    Determine the sigma level thresholds for the Rayleigh distribution. 
+    
+    Parameters
+    ----------
+    vals : array-like
+        A list of values for a bin or annulus
+    alpha : float
+        The number to input for the quartile distribution. The output will be
+        the location at which the cululative distribution function will equal
+        alpha/2 and 1-alpha/2. Corresponds roughly to 1-sigma -> 0.3173, 2-
+        sigma = 0.0455, 3-sigma -> 0.0027 for the 68-95-99.7 percent confidence
+        levels.
+        
+    Returns:
+    lthreshold, uthreshold : tuple of floats
+        Represents a two-sided interval for rejecting outliers at a p-value of 
+        alpha/2.
+    '''
+    
+    # The sample median
+    median = np.median(vals)
+    
+    # Determine the single parameter of the Rayleigh distribution from the 
+    # median (https://en.wikipedia.org/wiki/Rayleigh_distribution).
+    sigma = median/np.sqrt(2*np.log(2))
+    
+    lthreshold = sigma*np.sqrt(-2*np.log(1-alpha/2))
+    uthreshold = sigma*np.sqrt(-2*np.log(alpha/2))
+    
+    return lthreshold, uthreshold
 
 
 def remove_zero_values(bin_val, bin_ind, bin_name):
@@ -218,10 +294,12 @@ def process_annuli(median_grid, annulus_width, uvbins, sigma=3.):
     return annuli_limits, annuli_grid
 
 
-def flag_one_annulus(uvbin_group, value_group, grid_row_map, annuli_limits, annuli_grid):
+def flag_one_annulus(uvbin_group, value_group, grid_row_map, null_flags, annuli_limits, annuli_grid):
     
     median_grid_flg = np.zeros(annuli_grid.shape)
-    flag_list = []
+    flag_list = [list(null_flags)]
+    
+    print("Flag annulus.")
     
     for i_bin, (u,v,idx) in enumerate(grid_row_map[:-1]):
         
@@ -239,7 +317,11 @@ def flag_one_annulus(uvbin_group, value_group, grid_row_map, annuli_limits, annu
         median_grid_flg[u][v] = np.median(bin_val)
         if len(bin_flg):
             flag_list.append(bin_flg)
+    
+    if(len(flag_list)>0):
+        flag_list = np.concatenate(flag_list)
+    else:
+        flag_list = []
         
-    flag_list = np.concatenate(flag_list)
     return median_grid_flg, flag_list
     
