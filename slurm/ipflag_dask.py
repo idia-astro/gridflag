@@ -46,7 +46,7 @@ client = Client(cluster)
 ds_bindex, uvbins = compute_uv_bins.load_ms_file(msfile, fieldid=fieldid, bin_count_factor=1.0, chunksize=10**8)
 ds_ind = ds_bindex[0]
 
-flag_list, median_grid = gridflag.map_grid_partition(ds_ind, data_columns, uvbins, sigma=2.5, partition_level=4, client=client)
+flag_list, median_grid, median_grid_flg = gridflag.compute_ipflag_grid(ds_ind, data_columns, uvbins, sigma=2.5, partition_level=4, client=client)
 
 flag_vis_percentage = len(flag_list)/len(ds_ind.DATA)
 print(f"Percentage of bins flagged: {100*flag_vis_percentage:.2f}% - {len(flag_list)}/{len(ds_ind.DATA)} visibilities")
