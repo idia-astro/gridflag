@@ -2,9 +2,10 @@ import numpy as np
 
 from bokeh.plotting import figure, show
 from bokeh.models import ColumnDataSource, Label
-from bokeh.palettes import Spectral6
+from bokeh.palettes import Spectral6, Spectral4
 from bokeh.transform import linear_cmap
 from bokeh.layouts import gridplot 
+from bokeh.io import export_png
 
 from bokeh.util.hex import hexbin
 
@@ -12,6 +13,10 @@ from scipy.stats import median_absolute_deviation, gamma, chi2, poisson, expon, 
 
 import dask
 import dask.array as da
+
+from . import annulus_stats
+
+from .annulus_stats import get_fixed_thresholds, get_rayleigh_thresholds
 
 
 def plot_uv_grid(median_grid, uvbins, annulus_width, bin_max=None):
@@ -68,9 +73,55 @@ def plot_uv_grid(median_grid, uvbins, annulus_width, bin_max=None):
     p.rect('x_bin_range', 'y_bin_range', width=binwidth[0], height=binwidth[1], source=data, color='value_colors', line_color=None)
     p.arc(x=[0]*len(annulus_width), y=[0]*len(annulus_width), radius=annulus_width, start_angle=0.0, end_angle=2*np.pi, color="navy", line_dash='dashed', line_width=0.5)
     show(p)
+    return p, bin_max
 
 
-def plot_amp_dist_bins(median_grid, uvbins, value_groups, annulus_width=None, n=10000):
+
+def plot_rms_vs_dist(value_grids, names, uvbins, grid_row_map, n_annulus=20, title="RMS"):
+
+    uv_bins = np.asarray(value_grids[0]>0).nonzero()
+    uv_bins_ = np.array([uv_bins[0], uv_bins[1]])
+
+    bin_uv_dist = np.sqrt(uvbins[0][uv_bins_[0]-1]**2 + uvbins[1][uv_bins_[1]-1]**2)
+    
+    TOOLS="hover,crosshair,pan,zoom_in,zoom_out,box_zoom,reset,tap,save"
+    TOOLTIPS = [
+        ("(u,v)", "(@u,@v)"),
+        ("(x,y)", "($x{0.1f}, $y{0.1f})"),
+        ("count", "@count")
+    ]
+
+    p = figure(title=f"UV Distance vs. {title}", tools=TOOLS, plot_width=1000, plot_height=400, tooltips=TOOLTIPS, x_axis_label="UV Distance", y_axis_label=f"{title} (Jy)")
+
+    annulus_width = annulus_stats.compute_annulus_bins(value_grids[0], uvbins, n_annulus)
+
+    colors = ['red', 'green', 'blue']
+
+    for value_grid, color, name in zip(value_grids, Spectral4, names):
+        bin_median_values = value_grid[uv_bins]
+    
+        for ind, edge in enumerate(annulus_width):
+            minuv=0
+            if ind:
+                minuv = annulus_width[ind-1]
+            maxuv = annulus_width[ind]
+            ann_bin = bin_median_values[np.where((bin_uv_dist>minuv) & (bin_uv_dist<maxuv))]
+            mean_median_amp = np.mean(ann_bin)
+            mad_amp = median_absolute_deviation(ann_bin)
+        
+            p.line([minuv, maxuv], [mean_median_amp, mean_median_amp], line_width=2, color=color, alpha=0.8, 
+                    muted_color=color, muted_alpha=0.2, legend_label=name)
+
+            print(f'Annulus ({minuv:<6}- {maxuv:<6} lambda)\tcount: {len(ann_bin):<6}\tmedian: {mean_median_amp:.3f}\tmad: {mad_amp:.3f}')
+
+    p.legend.location = "top_right"
+    p.legend.click_policy="mute"
+
+    show(p)
+    
+
+
+def plot_amp_dist_bins(median_grid, uvbins, grid_row_map, annulus_width=[], n=10000, title="Median Amplitude"):
 
     uv_bins = np.asarray(median_grid>0).nonzero()
     (u, v) = uv_bins
@@ -78,7 +129,14 @@ def plot_amp_dist_bins(median_grid, uvbins, value_groups, annulus_width=None, n=
     
     bin_median_values = median_grid[uv_bins]
     bin_uv_dist = np.sqrt(uvbins[0][uv_bins_[0]-1]**2 + uvbins[1][uv_bins_[1]-1]**2)
-    bincounts = np.array([len(value_groups[u_-1][v_-1]) for u_,v_ in zip(u,v)])
+
+    # Compute bin counts
+    bin_count_grid = np.zeros(((np.max(grid_row_map[:,0])+1), (np.max(grid_row_map[:,1])+1)), dtype=int)
+    for c, (u_, v_) in zip(np.diff(grid_row_map[:,2]), grid_row_map[:,:2]):
+        bin_count_grid[u_][v_] = c
+    bincounts = np.array([bin_count_grid[u_-1][v_-1] for u_,v_ in zip(u,v)])
+
+#     bincounts = np.array([len(value_groups[u_-1][v_-1]) for u_,v_ in zip(u,v)])
     
     # Take a random sample of visibilities for plotting
     x = np.random.choice(len(bin_uv_dist), n)
@@ -100,11 +158,11 @@ def plot_amp_dist_bins(median_grid, uvbins, value_groups, annulus_width=None, n=
         ("count", "@count")
     ]
 
-    p = figure(title=f'UV Distance vs. Amplitude', tools=TOOLS, plot_width=1000, plot_height=400, tooltips=TOOLTIPS, x_axis_label="UV Distance", y_axis_label="Median Amplitude (Jy)")
+    p = figure(title=f"UV Distance vs. {title}", tools=TOOLS, plot_width=1000, plot_height=400, tooltips=TOOLTIPS, x_axis_label="UV Distance", y_axis_label=f"{title} (Jy)")
 
     p.scatter(x='x', y='y', fill_color=uv_colors, fill_alpha=0.7, line_color=None, source=source)
 
-    if annulus_width:
+    if len(annulus_width):
         for ind, edge in enumerate(annulus_width):
             minuv=0
             if ind:
@@ -162,51 +220,6 @@ def plot_rayleigh_fit(bin_values, func=rayleigh, nbins=50, hrange=None):
     p.add_layout(ratio_text)
 
     show(p)
-
-def get_fixed_thresholds(bin_median, alpha=None, sigma=None):
-    """
-    Get thresholds based on a Rayleigh distribution without fitting. Since there 
-    is only one parameter, the median of the bin alone can be used to set the 
-    shape and scale.
-    
-    parameters
-    ----------
-    bin_medians - array-like
-        Median values for each measurement in a bin
-    alpha - float
-        The cumulative distribution function is alpha/2 at the lower threshold, and 
-        1-alpha/2 for the upper threshold (either alpha or sigma is required).
-    sigma - int
-        Level for two-sided confidence interval. Only integer values 1-5 are 
-        accepted.
-    """
-    
-    if (alpha==None and sigma==None):
-        raise Exception("Please set either alpha of sigma.")
-    
-    if sigma:
-        if not(type(sigma==int)):
-            raise Exception("The value of sigma must be an integer less than 5.")
-        if sigma==1:
-            alpha=0.31731051
-        elif sigma==2:
-            alpha=0.04550026
-        elif sigma==3:
-            alpha=0.00269980
-        elif sigma==4:
-            alpha=0.00006334
-        elif sigma==5:
-            alpha=0.00000057        
-            
-    # Determine the single parameter of the Rayleigh distribution from the 
-    # median (https://en.wikipedia.org/wiki/Rayleigh_distribution).
-    sigma_r = bin_median/np.sqrt(2*np.log(2))
-    
-    lthreshold = sigma_r*np.sqrt(-2*np.log(1-alpha/2))
-    uthreshold = sigma_r*np.sqrt(-2*np.log(alpha/2))
-    
-    return lthreshold, uthreshold
-
 
 
 def plot_bin_distribution(bin_values, func=None, title='', nbins=50, hrange=None):
@@ -363,38 +376,6 @@ def get_bin_thresholds(median_grid, std_grid, annulus_width, nsigma=3):
         idx = np.where((uvlen*gridsize))
 
 
-def get_rayleigh_thresholds(vals, alpha=0.045):
-    '''
-    Determine the sigma level thresholds for the Rayleigh distribution. 
-    
-    Parameters
-    ----------
-    vals : array-like
-        A list of values for a bin or annulus
-    alpha : float
-        The number to input for the quartile distribution. The output will be
-        the location at which the cululative distribution function will equal
-        alpha/2 and 1-alpha/2. Corresponds roughly to 1-sigma -> 0.3173, 2-
-        sigma = 0.0455, 3-sigma -> 0.0027 for the 68-95-99.7 percent confidence
-        levels.
-        
-    Returns:
-    lthreshold, uthreshold : tuple of floats
-        Represents a two-sided interval for rejecting outliers at a p-value of 
-        alpha/2.
-    '''
-    
-    # The sample median
-    median = np.median(vals)
-    
-    # Determine the single parameter of the Rayleigh distribution from the 
-    # median (https://en.wikipedia.org/wiki/Rayleigh_distribution).
-    sigma = median/np.sqrt(2*np.log(2))
-    
-    lthreshold = sigma*np.sqrt(-2*np.log(1-alpha/2))
-    uthreshold = sigma*np.sqrt(-2*np.log(alpha/2))
-    
-    return lthreshold, uthreshold
 
 def sigma_clip_upper(bin_values, alpha:float=0.05, maxiter:int=4):
     '''Rayleigh sigma clipping - upper only'''

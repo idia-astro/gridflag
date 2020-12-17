@@ -18,7 +18,7 @@ import numba as nb
 
 from . import groupby_apply, groupby_partition, annulus_stats
 
-def map_grid_partition(ds_ind, data_columns, uvbins, sigma=2.5, partition_level=4, stokes='I', client=None):
+def compute_ipflag_grid(ds_ind, data_columns, uvbins, sigma=2.5, partition_level=4, stokes='I', client=None):
     """    
     Map functions to a concurrent dask functions to an Xarray dataset with 
     pre-computed grid indicies.
@@ -60,7 +60,7 @@ def map_grid_partition(ds_ind, data_columns, uvbins, sigma=2.5, partition_level=
     elif stokes=='Q':
         vals = (da.absolute(ds_ind.DATA[:,data_columns[0]].data - ds_ind.DATA[:,data_columns[1]].data))
     else:
-        raise ValueError(f"map_grid_partition: the stokes argument, '{stokes}', is not currently implemented, please select another value.")
+        raise ValueError(f"compute_ipflag_grid: the stokes argument, '{stokes}', is not currently implemented, please select another value.")
 
     #Comute chunks
     chunks = list(ubins.chunks[0])
@@ -81,6 +81,11 @@ def map_grid_partition(ds_ind, data_columns, uvbins, sigma=2.5, partition_level=
     group_chunks = [dask.delayed(groupby_partition.create_bin_groups_sort)(part[0][0], part[1]) for part in zip(dd_bins, dd_vals)] 
     function_chunks = [dask.delayed(groupby_partition.apply_grid_median)(c[1], c[2]) for c in group_chunks]
     median_grid = dask.delayed(groupby_partition.combine_function_partitions)(function_chunks)
+    
+    if client:
+        median_grid_unflagged = client.compute(median_grid).result()
+    else:
+        median_grid_unflagged = median_grid.compute()    
 
     # Autoamatically compute annulus widths (naive)
     annulus_width = dask.delayed(annulus_stats.compute_annulus_bins)(median_grid, uvbins, 10)
@@ -94,11 +99,11 @@ def map_grid_partition(ds_ind, data_columns, uvbins, sigma=2.5, partition_level=
     print("Compute median grid on the partitions.")
 
     if client:
-        flag_list, median_grid = client.compute(results).result()
+        flag_list, median_grid_flagged = client.compute(results).result()
     else:
-        flag_list, median_grid = results.compute()
+        flag_list, median_grid_flagged = results.compute()
 
-    return flag_list, median_grid
+    return flag_list, median_grid_unflagged, median_grid_flagged
 
 
 @nb.jit
@@ -167,9 +172,9 @@ def dask_partition_sort(a, b, v, p, chunks, binary_chunks, partition_level, clie
     umeds = [len(u.compute()) for u in umed]
     if client:
         pivot = combine_median(umed)
-        pivot = client.compute(pivot)
+        pivot = client.compute(pivot).result()
     else:
-        pivot = combine_median(umed).compute().result()
+        pivot = combine_median(umed).compute()
 
     if pivot == a_max:
         pivot-=0.5
@@ -286,7 +291,7 @@ def compute_median_grid(ds_ind, data_columns, uvbins, partition_level=4, stokes=
 
     print("Compute parallel partitions and do partial sort.")
     split_points, ubins_, vbins_, vals_, p_ = dask_partition_sort(ubins, vbins, vals, p, chunks, partition_level, 0, client=client)
-        
+
     print("Preparing dask delayed...")
     dd_bins = da.stack([ubins_, vbins_, p_]).T
     dd_bins = dd_bins.rechunk((ubins_.chunks[0], 3))

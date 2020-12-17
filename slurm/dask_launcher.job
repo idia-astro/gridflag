@@ -1,0 +1,10 @@
+#!/bin/bash
+#SBATCH -J dask_launcher
+#SBATCH -p Main
+#SBATCH --time=02:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --output=logs/dask_launcher.o%j
+#SBATCH --error=logs/dask_launcher.e%j
+
+singularity exec -B /etc/munge -B /var/log/munge -B /var/run/munge -B /opt/slurm/bin/:/usr/local/bin/ -B /opt/slurm/etc:/run/slurm/conf/ -B /opt/slurms/slurm-20-02-3-1/ /users/jbochenek/containers/astro_ipflag_tools.simg /usr/bin/python3 ipflag_dask.py

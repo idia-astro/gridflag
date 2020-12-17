@@ -322,6 +322,9 @@ def flag_one_annulus(uvbin_group, value_group, grid_row_map, null_flags, annuli_
         flag_list = np.concatenate(flag_list)
     else:
         flag_list = []
+    
+    # Ensure that the flags are ints
+    flag_list = np.array(flag_list, dtype=np.int64)
         
     return median_grid_flg, flag_list
     
