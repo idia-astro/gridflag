@@ -21,7 +21,22 @@ import xarray as xr
 
 from dask.array.core import slices_from_chunks
 
-@nb.jit(nopython=False, nogil=True, cache=True)
+# @nb.jit(nopython=False, cache=True)
+def sort_bins(uvbins, values):
+    idx = np.lexsort(np.array([uvbins[:,1], uvbins[:,0]]))  # no numba type for np.lexsort, either use nopython=False or fix lexsort implementation included below 
+    uvbins = uvbins[idx]
+    values = values[idx]
+
+    null_flags = uvbins[np.where(values==0)]
+    print("Zero values removed: {:.2f}%".format(100*len(null_flags)/float(len(values))))
+
+    uvbins = uvbins[np.where(values!=0)]
+    values = values[np.where(values!=0)]
+
+    return uvbins, values, null_flags[:,2]
+
+
+@nb.jit
 def create_bin_groups_sort(uvbins, values):
     """
     Sort U and V bins for a partition of a dataset such that uv bins are contiguous in the
@@ -46,50 +61,27 @@ def create_bin_groups_sort(uvbins, values):
         A tuple with one row for each unique UV bin pair and its starting index in the 
         uvbins and values arrays.
     """
-    idx = np.lexsort(np.array([uvbins[:,1], uvbins[:,0]]))  # no numba type for np.lexsort, either use nopython=False or fix lexsort implementation included below 
-    uvbins = uvbins[idx]
-    values = values[idx]
     
-    
-    # Remove rows with zero values (and return flag indicies if requested)
-#     print("Zero values removed: {:.2f}%".format(100*len(np.where(values==0)[0])/float(len(values))))
-    null_flags = uvbins[np.where(values==0)]
-    print("Zero values removed: {:.2f}%".format(100*len(null_flags)/float(len(values))))
-
-    uvbins = uvbins[np.where(values!=0)]
-    values = values[np.where(values!=0)]
-
     ubin_prev, vbin_prev = uvbins[0][0], uvbins[0][1]
     grid_row_map = [[ubin_prev, vbin_prev, 0]]
-
+    
 #     print(f"init: ({ubin_prev}, {vbin_prev})")
 
     k = 0
-    for row in literal_unroll(uvbins):
+    for row in uvbins:
         if ((row[0] != ubin_prev) | (row[1] != vbin_prev)):
             ubin_prev, vbin_prev = row[0], row[1]
             grid_row_map.append([ubin_prev, vbin_prev, k])
         k = k+1
 
-# Generates numba error:
-
-#     for k in range(len(uvbins)):
-#         if ((uvbins[k][0] != ubin_prev) | (uvbins[k][1] != vbin_prev)):
-#             ubin_prev, vbin_prev = uvbins[k][0], uvbins[k][1]
-#             grid_row_map.append([ubin_prev, vbin_prev, k])
-
-#     for k, row in enumerate(zip(uvbins, values)):
-#         if ((row[0][0] != ubin_prev) | (row[0][1] != vbin_prev)):
-#             ubin_prev, vbin_prev = row[0][0], row[0][1]
-#             grid_row_map.append([ubin_prev, vbin_prev, k])
-
-
     grid_row_map.append([-1, -1, len(uvbins)]) # Add the upper index for the final row
     grid_row_map = np.array(grid_row_map, dtype=np.int64)
-    return uvbins, values, grid_row_map, null_flags[:,2]
+        
+    return uvbins, values, grid_row_map
 
 
-@nb.jit(nopython=True, nogil=True, cache=True)
+
+@nb.jit
 def apply_grid_median(values, grid_row_map):
     """
     Apply a function broadcasting across all values in each bin within a given partition. 
@@ -239,23 +231,6 @@ def combine_grid_partitions(value_chunks, grid_row_maps, function_grid):
 
 # ---------------------------------------------------------------------------------
 
-
-def compute_annulus_stats(median_grid, value_group, bin_group, grid_row_map, annulus_width, sigma=3.):
-
-    median_grid_flg = np.zeros(median_grid.shape)
-    value_groups_flg = [[[] for r_ in c_] for c_ in value_groups]
-    flag_ind_list = []
-
-    for ind, edge in enumerate(annulus_width):
-        minuv=0
-        if ind:
-            minuv = annulus_width[ind-1]
-        maxuv = annulus_width[ind]
-
-        print(f"Annulus ({minuv}-{maxuv}): ")
-        
-        ann_bin_val, ann_bin_ind, ann_bin_name, bin_flag_ind = select_annulus_bins(minuv, maxuv, value_groups, index_groups, median_grid, uvbins)
-
         
 def combine_annulus_results(median_chunks, flag_chunks):
 
@@ -334,13 +309,10 @@ def binary_partition(a, binary_chunks, partition_level, p):
     
 
     
-@nb.jit(nopython=False, nogil=True, cache=True)
+@nb.jit
 def partition_permutation_2d(a, b, v, p, pivot):
     # workaround to get numba working for empty lists    
-    a = np.copy(a)
-    b = np.copy(b)
-    v = np.copy(v)
-    p = np.copy(p)
+
     i = 0
     for j in range(len(a)):
         if a[j] <= pivot:

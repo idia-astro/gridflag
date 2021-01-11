@@ -273,8 +273,8 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
                     int(bin_count_factor*(uvlimit[1][1] - uvlimit[1][0])/binwidth[1])]
                 
 
-    uvbins = [np.linspace( uvlimit[0][0], uvlimit[0][1], bincount[0] ),
-              np.linspace( uvlimit[1][0], uvlimit[1][1], bincount[1] )]
+    uvbins = (np.linspace( uvlimit[0][0], uvlimit[0][1], bincount[0] ),
+              np.linspace( uvlimit[1][0], uvlimit[1][1], bincount[1] ))
 
     # Reload the Main table grouped by DATA_DESC_ID
     ms = xds_from_ms(msfile, columns=[datacolumn, 'UVW', 'FLAG'], group_cols=['FIELD_ID', 'DATA_DESC_ID'], table_keywords=True, column_keywords=True)

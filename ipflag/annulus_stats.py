@@ -1,12 +1,97 @@
 import numpy as np
+import numba as nb
+
 from scipy.stats import median_absolute_deviation, sigmaclip
+
 
 length_checker = np.vectorize(len) 
 
-def compute_bin_threshold(bin_val, annulus_threshold, alpha=None):
-    
-    ci_lower, ci_upper = annulus_threshold[0], annulus_threshold[1]
+@nb.jit
+def median_abs_deviation(x, scale=1.4826):
 
+    # Consistent with `np.var` and `np.std`.
+    if not x.size:
+        return np.nan
+
+    med = np.median(x)
+    mad = np.median(np.abs(x - med))
+
+    return mad * scale
+
+@nb.jit
+def sigmaclip(data, siglow=3., sighigh=3., niter=-100, 
+              use_median=False):
+    """Remove outliers from data which lie more than siglow/sighigh
+    sample standard deviations from mean. Adapted from LOFAR 
+    implementation: https://tkp.readthedocs.io/en/r3.0/devref/tkp/utility/sigmaclip.html
+
+    Args:
+
+        data (numpy.ndarray): Numpy array containing data values.
+
+    Kwargs:
+
+        niter (int): Number of iterations to calculate mean & standard
+            deviation, and reject outliers, If niter is negative,
+            iterations will continue until no more clipping occurs or
+            until abs('niter') is reached, whichever is reached first.
+
+        siglow (float): Kappa multiplier for standard deviation. Std *
+            siglow defines the value below which data are rejected.
+
+        sighigh (float): Kappa multiplier for standard deviation. Std *
+            sighigh defines the value above which data are rejected.
+
+        use_median (bool): Use median of data instead of mean.
+
+    Returns:
+        tuple: (2-tuple) Boolean numpy array of data clipped data
+
+    """
+
+    ilow, ihigh = 0., 0.
+    nniter = -niter if niter < 0 else niter
+    i = 0
+    for i in range(nniter):
+        N = len(data)
+
+        if use_median:
+            mean = np.median(data)
+        else:
+            mean = np.mean(data)
+
+        sigma = np.sqrt((np.sum(data**2) - N*mean**2)/(N-1))
+                
+        ilow = mean - sigma * siglow
+        ihigh = mean + sigma * sighigh
+
+        if N < 2:
+            return data, ilow, ihigh
+        
+        newdata = data[(np.where((data>ilow) & (data<ihigh)))]
+        
+        if niter < 0:
+            # break when no changes
+            if (len(newdata) == len(data)):
+                break
+        data = newdata
+        
+    return data, ilow, ihigh
+
+@nb.jit
+def get_annulus_limits(ann_bin_median, sigma):
+
+    ann_bin_median_log = np.log(ann_bin_median)
+    log_limits = [np.median(ann_bin_median_log), median_abs_deviation(ann_bin_median_log)]
+
+    ci_lower, ci_upper = np.exp(log_limits[0] - sigma*log_limits[1]), np.exp(log_limits[0] + sigma*log_limits[1])
+
+    return ci_lower, ci_upper
+
+
+@nb.jit
+def compute_bin_threshold(bin_val, ci_lower, ci_upper, alpha=None, sigma=3.0):
+    
     if len(bin_val)==0:
         return None
 
@@ -16,32 +101,27 @@ def compute_bin_threshold(bin_val, annulus_threshold, alpha=None):
     bin_med = np.median(bin_val)
 
     if bin_med > ci_upper:
-        bin_thresholds = get_fixed_thresholds(ci_upper, alpha=alpha)
-        bin_val_sel = bin_val[np.where( bin_val<bin_thresholds[1]) ]
+        lthreshold, uthreshold = get_fixed_thresholds(ci_upper, alpha=alpha)
+        bin_val_sel = bin_val[np.where( bin_val<uthreshold) ]
+        if len(bin_val_sel)==0:
+            return 0., 0.
         bin_ratio = np.mean(bin_val_sel)/np.median(bin_val_sel)
         if bin_ratio > 1.2:
-            bin_val_sel, low, high = sigmaclip(bin_val_sel, 3, 3)
-            bin_thresholds = (bin_thresholds[0], np.min([high, bin_thresholds[1]]) )
+            bin_val_sel, low, high = sigmaclip(bin_val_sel, sigma, sigma)
+            uthreshold =np.min(np.array([high, uthreshold]))
+        if len(bin_val_sel)==0:
+            return 0., 0.
         if np.median(bin_val_sel) > ci_upper:
-            return (0,0)
-        bin_thresholds = get_rayleigh_thresholds(bin_val_sel, alpha=alpha)
+            return 0., 0.
+        lthreshold, uthreshold = get_rayleigh_thresholds(bin_val_sel, alpha=alpha)
     else:
-        bin_thresholds = get_rayleigh_thresholds(bin_val, alpha=alpha) 
+        lthreshold, uthreshold = get_rayleigh_thresholds(bin_val, alpha=alpha) 
 
-    return bin_thresholds
-
-
-def get_annulus_limits(ann_bin_median, sigma):
-
-    ann_bin_median_log = np.log(ann_bin_median)
-    log_limits = [np.median(ann_bin_median_log), median_absolute_deviation(ann_bin_median_log)]
-
-    ci_lower, ci_upper = np.exp(log_limits[0] - sigma*log_limits[1]), np.exp(log_limits[0] + sigma*log_limits[1])
-
-    return ci_lower, ci_upper
+    return lthreshold, uthreshold
 
 
-def get_fixed_thresholds(bin_median, alpha=None, sigma=None):
+@nb.jit
+def get_fixed_thresholds(bin_median:float, alpha:float=0., sigma:int=0):
     """
     Get thresholds based on a Rayleigh distribution without fitting. Since there 
     is only one parameter, the median of the bin alone can be used to set the 
@@ -59,22 +139,23 @@ def get_fixed_thresholds(bin_median, alpha=None, sigma=None):
         accepted.
     """
     
-    if (alpha==None and sigma==None):
+    if (alpha==0 and sigma==0):
         raise Exception("Please set either alpha of sigma.")
     
-    if sigma:
-        if not(type(sigma==int)):
-            raise Exception("The value of sigma must be an integer less than 6.")
-        if sigma==1:
-            alpha=0.31731051
-        elif sigma==2:
-            alpha=0.04550026
-        elif sigma==3:
-            alpha=0.00269980
-        elif sigma==4:
-            alpha=0.00006334
-        elif sigma==5:
-            alpha=0.00000057        
+    if alpha==0:
+        if sigma>0:
+            if sigma==1:
+                alpha=0.31731051
+            elif sigma==2:
+                alpha=0.04550026
+            elif sigma==3:
+                alpha=0.00269980
+            elif sigma==4:
+                alpha=0.00006334
+            elif sigma==5:
+                alpha=0.00000057        
+            else:
+                raise Exception("The value of sigma must be an integer less than 6.")
             
     # Determine the single parameter of the Rayleigh distribution from the 
     # median (https://en.wikipedia.org/wiki/Rayleigh_distribution).
@@ -85,7 +166,7 @@ def get_fixed_thresholds(bin_median, alpha=None, sigma=None):
     
     return lthreshold, uthreshold
 
-
+@nb.jit
 def get_rayleigh_thresholds(vals, alpha=0.045):
     '''
     Determine the sigma level thresholds for the Rayleigh distribution. 
@@ -107,6 +188,8 @@ def get_rayleigh_thresholds(vals, alpha=0.045):
         alpha/2.
     '''
     
+    if (alpha > 1):
+        print("Invalid value for alpha.")
     # The sample median
     median = np.median(vals)
     
@@ -185,87 +268,19 @@ def compute_annulus_bins(median_grid, uvbins, nbins):
     return annulus_bins
 
 
-def select_annulus_bins(minuv, maxuv, value_groups, index_groups, median_grid, uvbins):
-
-    # Find grid of non-empty of non-trivial bins - equivalent to np.where(median_grid>0)
-    uv_bins = np.asarray(median_grid>0).nonzero()
-
-    # Convert from tuple of arrays to ndarray
-    uv_bins_ = np.array([uv_bins[0], uv_bins[1]])
-
-    # Compute uv-distance of each bin
-    bin_uv_dist = np.sqrt(uvbins[0][uv_bins_[0]-1]**2 + uvbins[1][uv_bins_[1]-1]**2)
-
-    annulus_bins = np.where((bin_uv_dist > minuv) & (bin_uv_dist < maxuv))[0]
-
-    ann_bin_val = np.array([np.array(value_groups[x-1][y-1]) for x,y in zip(uv_bins_[:,annulus_bins][0], uv_bins_[:,annulus_bins][1])])
-    ann_bin_ind = np.array([np.array(index_groups[x-1][y-1], dtype=int) for x,y in zip(uv_bins_[:,annulus_bins][0], uv_bins_[:,annulus_bins][1])])
-    ann_bin_name = np.array([(x-1,y-1) for x,y in zip(uv_bins_[:,annulus_bins][0], uv_bins_[:,annulus_bins][1])])
-
-    # Remove zero amplitude values from all bins
-    ann_bin_val, ann_bin_ind, ann_bin_name, bin_flag_ind = remove_zero_values(ann_bin_val, ann_bin_ind, ann_bin_name)
-    
-    return ann_bin_val, ann_bin_ind, ann_bin_name, bin_flag_ind
-
-
-
-def compute_annulus_stats(median_grid, value_groups, index_groups, uvbins, annulus_width, sigma=3.):
-
-    median_grid_flg = np.zeros(median_grid.shape)
-    value_groups_flg = [[[] for r_ in c_] for c_ in value_groups]
-    flag_ind_list = []
-
-    for ind, edge in enumerate(annulus_width):
-        minuv=0
-        if ind:
-            minuv = annulus_width[ind-1]
-        maxuv = annulus_width[ind]
-
-        print(f"Annulus ({minuv}-{maxuv}): ")
-
-        ann_bin_val, ann_bin_ind, ann_bin_name, bin_flag_ind = select_annulus_bins(minuv, maxuv, value_groups, index_groups, median_grid, uvbins)
-
-        # Add pre-flagged visibilities
-        flag_ind_list.append(bin_flag_ind)
-        
-        # Re-compute bin medians
-        ann_bin_median = np.array([np.median(_) for _ in ann_bin_val])
-
-        ci_lower, ci_upper = get_annulus_limits(ann_bin_median, sigma)
-        
-        print(f"\t count: {len(ann_bin_val)},\t median: {np.median(ann_bin_median):.3f},\t pre-flags:{len(bin_flag_ind)}\t CI: [{ci_lower:.3f}, {ci_upper:.3f}]")
-
-        for bin_val, bin_ind, bin_name in zip(ann_bin_val, ann_bin_ind, ann_bin_name):
-            u, v = bin_name[0], bin_name[1]
-            bin_thresholds = compute_bin_threshold(bin_val, (ci_lower, ci_upper))
-    
-            bin_flg = bin_ind[np.where((bin_val<=bin_thresholds[0]) | (bin_val>=bin_thresholds[1]))]
-            bin_val = bin_val[np.where((bin_val>bin_thresholds[0]) & (bin_val<bin_thresholds[1]))] 
-
-            value_groups_flg[u][v] = bin_val
-            median_grid_flg[u][v] = np.median(bin_val)
-            flag_ind_list.append(bin_flg)
-        
-        print(f"\t post-flags: {len(flag_ind_list)}")
-        
-    flag_ind_list = np.concatenate(flag_ind_list)
-
-    return median_grid_flg, value_groups_flg, flag_ind_list
-    
-    
 # ----------------------------------------------------------------------------------------
 
-
-def process_annuli(median_grid, annulus_width, uvbins, sigma=3.):    
+@nb.jit
+def process_annuli(median_grid, annulus_width, ubins, vbins, sigma=3.):    
 
     annuli_grid = -1*np.ones(median_grid.shape, dtype=np.int32)
     
-    uv_bins = np.asarray(median_grid>0).nonzero()
-    uv_bins = np.array([uv_bins[0], uv_bins[1]])
+    u_bins, v_bins = np.where(median_grid>0)
+    uv_bins = np.vstack((u_bins, v_bins))
     
-    bin_uv_dist = np.sqrt(uvbins[0][uv_bins[0]-1]**2 + uvbins[1][uv_bins[1]-1]**2)
-    
-    annuli_limits = []
+    bin_uv_dist = np.sqrt(ubins[uv_bins[0]]**2 + vbins[uv_bins[1]]**2)
+
+    annuli_limits = np.empty( shape=(0, 2), dtype=np.float64 )
     
     for ind, edge in enumerate(annulus_width):
             minuv=0
@@ -274,34 +289,39 @@ def process_annuli(median_grid, annulus_width, uvbins, sigma=3.):
             maxuv = annulus_width[ind]
 
             ann_bin_index = np.where((bin_uv_dist > minuv) & (bin_uv_dist < maxuv))[0]
-            ann_bin_names = np.array([(x-1,y-1) for x,y in zip(uv_bins[:,ann_bin_index][0], uv_bins[:,ann_bin_index][1])])
-            
-            print(f"Annulus {ind} - ({minuv:<8.1f}- {maxuv:<8.1f}): {len(ann_bin_names)}")
+            ann_bin_names = np.array([(uv[0],uv[1]) for uv in uv_bins[:,ann_bin_index].T])
             
             ann_bin_median = np.array([median_grid[u][v] for (u,v) in ann_bin_names])
+            
+            print("zero values", len(ann_bin_median)-len(ann_bin_median.nonzero()[0]), "bins", len(ann_bin_median))
+            print("ann_bin_median", ann_bin_median)
 
             ci_lower, ci_upper = get_annulus_limits(ann_bin_median, sigma)
 
-            print(f"\t med: {np.median(ann_bin_median):.2f} limits: {ci_lower:.2f} - {ci_upper:.2f}")
+            print("\t med: ", np.median(ann_bin_median), " limits: ", ci_lower, " - ", ci_upper)
 
             for (u,v) in ann_bin_names:
                 annuli_grid[u][v] = ind
 
-            annuli_limits.append([ci_lower, ci_upper])
-    
-    annuli_limits = np.array(annuli_limits)
-            
+            annuli_limits = np.append(annuli_limits, np.array([[ci_lower, ci_upper]]), axis=0)
+
     return annuli_limits, annuli_grid
 
 
-def flag_one_annulus(uvbin_group, value_group, grid_row_map, null_flags, annuli_limits, annuli_grid):
+
+@nb.jit
+def flag_one_annulus(uvbin_group, value_group, grid_row_map, annuli_limits, annuli_grid, sigma=3.):
     
     median_grid_flg = np.zeros(annuli_grid.shape)
-    flag_list = [list(null_flags)]
-    
+    flag_list = np.empty( shape=(0), dtype=np.int64 )
+
     print("Flag annulus.")
     
-    for i_bin, (u,v,idx) in enumerate(grid_row_map[:-1]):
+    for i_bin, bin_location in enumerate(grid_row_map[:-1]):
+        u, v, idx = bin_location
+        
+        if not(i_bin%10000):
+            print(i_bin, "/", len(grid_row_map))
         
         istart, iend =  grid_row_map[i_bin][2], grid_row_map[i_bin+1][2]
         bin_val = value_group[istart:iend]
@@ -309,22 +329,15 @@ def flag_one_annulus(uvbin_group, value_group, grid_row_map, null_flags, annuli_
         
         (ci_lower, ci_upper) = annuli_limits[annuli_grid[u][v]]
         
-        bin_thresholds = compute_bin_threshold(bin_val, (ci_lower, ci_upper))
+        lthreshold, uthreshold = compute_bin_threshold(bin_val, ci_lower, ci_upper, sigma=sigma)
         
-        bin_flg = bin_ind[np.where((bin_val<=bin_thresholds[0]) | (bin_val>=bin_thresholds[1]))]
-        bin_val = bin_val[np.where((bin_val>bin_thresholds[0]) & (bin_val<bin_thresholds[1]))] 
+        bin_flg = bin_ind[np.where((bin_val<=lthreshold) | (bin_val>=uthreshold))]
+        bin_val = bin_val[np.where((bin_val>lthreshold) & (bin_val<uthreshold))] 
+        
+        if len(bin_val)>0:
+            median_grid_flg[u][v] = np.median(bin_val)
 
-        median_grid_flg[u][v] = np.median(bin_val)
         if len(bin_flg):
-            flag_list.append(bin_flg)
-    
-    if(len(flag_list)>0):
-        flag_list = np.concatenate(flag_list)
-    else:
-        flag_list = []
-    
-    # Ensure that the flags are ints
-    flag_list = np.array(flag_list, dtype=np.int64)
-        
+            flag_list = np.append(flag_list, bin_flg)
+                
     return median_grid_flg, flag_list
-    
