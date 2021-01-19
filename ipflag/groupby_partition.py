@@ -28,16 +28,17 @@ def sort_bins(uvbins, values):
     values = values[idx]
 
     null_flags = uvbins[np.where(values==0)]
-    print("Zero values removed: {:.2f}%".format(100*len(null_flags)/float(len(values))))
 
     uvbins = uvbins[np.where(values!=0)]
+    print("Zero values removed: {:.2f}% of {} values, {} remaining".format(100*len(null_flags)/float(len(values)), len(values), len(uvbins)))
+
     values = values[np.where(values!=0)]
 
     return uvbins, values, null_flags[:,2]
 
 
-@nb.jit
-def create_bin_groups_sort(uvbins, values):
+@nb.njit(nogil=True)
+def create_bin_groups_sort(uvbins, values, flag_list):
     """
     Sort U and V bins for a partition of a dataset such that uv bins are contiguous in the
     datset. Return sorted data arrays for the bins, indicies, and values and a 
@@ -46,10 +47,12 @@ def create_bin_groups_sort(uvbins, values):
     
     Parameters
     ----------
-    uvbins: dask.array
+    uvbins : dask.array
         A dask array with three columns: u and v bins and index for one partition.
-    values: dask.array
+    values : dask.array
         A dask array with visibility values corresponding to the uvbins rows.
+    flag_list :
+        List of indicies for rows with zero value, this is passed through without change.
     
     Returns
     -------
@@ -60,13 +63,13 @@ def create_bin_groups_sort(uvbins, values):
     grid_row_map:
         A tuple with one row for each unique UV bin pair and its starting index in the 
         uvbins and values arrays.
+    flag_list:
+        List of indicies for rows with zero value.
     """
     
     ubin_prev, vbin_prev = uvbins[0][0], uvbins[0][1]
     grid_row_map = [[ubin_prev, vbin_prev, 0]]
     
-#     print(f"init: ({ubin_prev}, {vbin_prev})")
-
     k = 0
     for row in uvbins:
         if ((row[0] != ubin_prev) | (row[1] != vbin_prev)):
@@ -76,12 +79,12 @@ def create_bin_groups_sort(uvbins, values):
 
     grid_row_map.append([-1, -1, len(uvbins)]) # Add the upper index for the final row
     grid_row_map = np.array(grid_row_map, dtype=np.int64)
-        
-    return uvbins, values, grid_row_map
+    
+    return uvbins, values, grid_row_map, flag_list
 
 
 
-@nb.jit
+@nb.njit(nogil=True)
 def apply_grid_median(values, grid_row_map):
     """
     Apply a function broadcasting across all values in each bin within a given partition. 
@@ -148,7 +151,7 @@ def apply_grid_function(values, grid_row_map, function):
     return function_grid
 
 
-@nb.jit(nopython=True, nogil=True, cache=True)
+# @nb.jit(nopython=True, nogil=True, cache=True)
 def combine_function_partitions(median_chunks):
     """
     Simply combine a set of grid partitions in to a full uv grid.
@@ -165,7 +168,7 @@ def combine_function_partitions(median_chunks):
     """
     dim1 = np.max(np.array([chunk.shape[0] for chunk in median_chunks], dtype=np.int32))
     dim2 = np.max(np.array([chunk.shape[1] for chunk in median_chunks], dtype=np.int32))
-    print(dim1, dim2)
+
     function_grid = np.zeros((dim1, dim2))
     for k, chunk in enumerate(median_chunks):
         cshape = chunk.shape
@@ -309,7 +312,7 @@ def binary_partition(a, binary_chunks, partition_level, p):
     
 
     
-@nb.jit
+@nb.njit(nogil=True)
 def partition_permutation_2d(a, b, v, p, pivot):
     # workaround to get numba working for empty lists    
 

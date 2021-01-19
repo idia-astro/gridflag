@@ -56,11 +56,16 @@ def compute_ipflag_grid(ds_ind, data_columns, uvbins, sigma=2.5, partition_level
 
     # Determine which polarization state to grid and flag
     if stokes=='I':
-        vals = (da.absolute(ds_ind.DATA[:,data_columns[0]].data + ds_ind.DATA[:,data_columns[1]].data))
+        vals = (da.absolute(ds_ind.DATA[:,0].data + ds_ind.DATA[:,-1].data))
     elif stokes=='Q':
-        vals = (da.absolute(ds_ind.DATA[:,data_columns[0]].data - ds_ind.DATA[:,data_columns[1]].data))
+        vals = (da.absolute(ds_ind.DATA[:,0].data - ds_ind.DATA[:,-1].data))
+    elif stokes=='U':
+        vals = (da.real(ds_ind.DATA[:,1].data + ds_ind.DATA[:,2].data))
+    elif stokes=='V':
+        vals = (da.imag(ds_ind.DATA[:,1].data - ds_ind.DATA[:,2].data))
     else:
         raise ValueError(f"compute_ipflag_grid: the stokes argument, '{stokes}', is not currently implemented, please select another value.")
+
 
     #Comute chunks
     chunks = list(ubins.chunks[0])
@@ -68,8 +73,15 @@ def compute_ipflag_grid(ds_ind, data_columns, uvbins, sigma=2.5, partition_level
     # The array 'p' is used to map flags back to the original file order
     p = da.arange(len(ds_ind.newrow), dtype=np.int64, chunks=ubins.chunks)
 
+#     ubins = ubins[vals>0]
+#     vbins = vbins[vals>0]
+#     p = p[vals>0]
+#     vals = vals[vals>0]
+
     # Execute partition function which does a partial sort on U and V bins
     split_points, ubins_part, vbins_part, vals_part, p_part = dask_partition_sort(ubins, vbins, vals, p, chunks, partition_level, 0, client=client)
+
+    print(f"Dataset split to {len(ubins_part.chunks[0])} partitions for flagging: {ubins_part.chunks[0]} rows.")
 
     # Convert back to delayed one final time
     dd_bins = da.stack([ubins_part, vbins_part, p_part]).T
@@ -78,10 +90,12 @@ def compute_ipflag_grid(ds_ind, data_columns, uvbins, sigma=2.5, partition_level
     dd_bins = dd_bins.to_delayed()
     dd_vals = vals_part.to_delayed()
     
-    group_chunks = [dask.delayed(groupby_partition.create_bin_groups_sort)(part[0][0], part[1]) for part in zip(dd_bins, dd_vals)] 
+    group_bins_sort = [dask.delayed(groupby_partition.sort_bins)(part[0][0], part[1]) for part in zip(dd_bins, dd_vals)] 
+
+    group_chunks = [dask.delayed(groupby_partition.create_bin_groups_sort)(c[0], c[1], c[2]) for c in group_bins_sort] 
     function_chunks = [dask.delayed(groupby_partition.apply_grid_median)(c[1], c[2]) for c in group_chunks]
     median_grid = dask.delayed(groupby_partition.combine_function_partitions)(function_chunks)
-    
+
     if client:
         median_grid_unflagged = client.compute(median_grid).result()
     else:
@@ -92,8 +106,8 @@ def compute_ipflag_grid(ds_ind, data_columns, uvbins, sigma=2.5, partition_level
 
     print(f"Initiate flagging with sigma = {sigma}.")
 
-    annuli_data = dask.delayed(annulus_stats.process_annuli)(median_grid, annulus_width, uvbins, sigma=sigma)
-    flag_results = [dask.delayed(annulus_stats.flag_one_annulus)(c[0], c[1], c[2], c[3], annuli_data[0], annuli_data[1]) for c in group_chunks]
+    annuli_data = dask.delayed(annulus_stats.process_annuli)(median_grid, annulus_width, uvbins[0], uvbins[1], sigma=sigma)
+    flag_results = [dask.delayed(annulus_stats.flag_one_annulus)(c[0], c[1], c[2], c[3], annuli_data[0], annuli_data[1], sigma=sigma) for c in group_chunks]
     results = dask.delayed(groupby_partition.combine_annulus_results)([fr[0] for fr in flag_results], [fr[1] for fr in flag_results])
 
     print("Compute median grid on the partitions.")
@@ -106,16 +120,15 @@ def compute_ipflag_grid(ds_ind, data_columns, uvbins, sigma=2.5, partition_level
     return flag_list, median_grid_unflagged, median_grid_flagged
 
 
-@nb.jit
+@nb.njit(nogil=True)
 def median_of_medians(data, sublist_length=11):
     # Compute median of medians on each chunk
     data = np.array([np.median(k) for k in [data[j:(j + sublist_length)] for j in range(0,len(data),sublist_length)]])
     return data
 
-@nb.jit
 def apply_median_func(data, depth):
-    for i in range(depth):
-        data = median_of_medians(data)
+    for i in np.arange(depth):
+        data = median_of_medians(data, 11)
     return data
 
 
@@ -126,7 +139,7 @@ def da_median(a):
     
 def combine_median(meds):
     umed_list = np.concatenate(meds)
-    print(f"umeds: {len(umed_list)}")
+    print(f"umeds:", len(umed_list))
     return np.median(umed_list)
 
 combine_median = dask.delayed(combine_median)
@@ -169,7 +182,7 @@ def dask_partition_sort(a, b, v, p, chunks, binary_chunks, partition_level, clie
 
     umed = [apply_median_func(a_, med_depth) for a_ in a]
 
-    umeds = [len(u.compute()) for u in umed]
+#     umeds = [len(u.compute()) for u in umed]
     if client:
         pivot = combine_median(umed)
         pivot = client.compute(pivot).result()
@@ -302,7 +315,10 @@ def compute_median_grid(ds_ind, data_columns, uvbins, partition_level=4, stokes=
     del ubins, vbins, vals, p
 
     print("Compute UV map and median grid.")
-    group_chunks = [dask.delayed(groupby_partition.create_bin_groups_sort)(part[0][0], part[1]) for part in zip(dd_bins, dd_vals)] 
+
+    group_bins_sort = [dask.delayed(groupby_partition.sort_bins)(part[0][0], part[1]) for part in zip(dd_bins, dd_vals)] 
+
+    group_chunks = [dask.delayed(groupby_partition.create_bin_groups_sort)(c[0], c[1], c[2]) for c in group_bins_sort] 
     function_chunks = [dask.delayed(groupby_partition.apply_grid_median)(c[1], c[2]) for c in group_chunks]
     median_grid = dask.delayed(groupby_partition.combine_function_partitions)(function_chunks)
 

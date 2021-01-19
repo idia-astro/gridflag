@@ -1,15 +1,30 @@
 import numpy as np
 import numba as nb
 
-from scipy.stats import median_absolute_deviation, sigmaclip
-
-
 length_checker = np.vectorize(len) 
 
-@nb.jit
+@nb.jit(nogil=True)
 def median_abs_deviation(x, scale=1.4826):
-
-    # Consistent with `np.var` and `np.std`.
+    """Compute median absolute deviation. Adapted from scipy for use with numba [1].
+    
+    Parameters
+    ----------
+    x : array_like
+        Input numpy array
+    scale : scalar, optional
+        The numerical value of scale with be multiplied by the final result. For a normal 
+        distribution a value of 1/0.67449 is used (default).
+        
+    Returns
+    -------
+    mad : scalar or ndarray
+        The scalar output value.
+        
+    References
+    ----------
+    [1] https://github.com/scipy/scipy/blob/master/scipy/stats/stats.py
+    
+    """
     if not x.size:
         return np.nan
 
@@ -18,34 +33,52 @@ def median_abs_deviation(x, scale=1.4826):
 
     return mad * scale
 
-@nb.jit
+
+@nb.njit(nogil=True)
 def sigmaclip(data, siglow=3., sighigh=3., niter=-100, 
               use_median=False):
-    """Remove outliers from data which lie more than siglow/sighigh
-    sample standard deviations from mean. Adapted from LOFAR 
-    implementation: https://tkp.readthedocs.io/en/r3.0/devref/tkp/utility/sigmaclip.html
+    """Remove outliers from data which lie more than siglow/sighigh sample standard 
+    deviations from mean. Adapted from the scipy [1] and LOFAR tpk implementations [2].
 
-    Args:
+    Parameters
+    ----------
 
-        data (numpy.ndarray): Numpy array containing data values.
+        data : numpy.ndarray
+            Numpy array containing data values.
 
-    Kwargs:
+        siglow : float, optional
+            Kappa multiplier for standard deviation. Std * siglow defines the value below 
+            which data are rejected.
 
-        niter (int): Number of iterations to calculate mean & standard
-            deviation, and reject outliers, If niter is negative,
-            iterations will continue until no more clipping occurs or
-            until abs('niter') is reached, whichever is reached first.
+        sighigh : float, optional
+            Kappa multiplier for standard deviation. Std * sighigh defines the value above
+            which data are rejected.
 
-        siglow (float): Kappa multiplier for standard deviation. Std *
-            siglow defines the value below which data are rejected.
+        niter : int, optional
+            Number of iterations to calculate mean & standard deviation, and reject 
+            outliers, If niter is negative, iterations will continue until no more 
+            clipping occurs or until abs('niter') is reached, whichever is reached first.
 
-        sighigh (float): Kappa multiplier for standard deviation. Std *
-            sighigh defines the value above which data are rejected.
+        use_median : bool, optional
+            Use median of data instead of mean.
 
-        use_median (bool): Use median of data instead of mean.
+    Returns
+    -------
+        data : numpy.array
+            Numpy array of data clipped data.
+            
+        ilow : float
+            Lower threshold used for clipping.
+            
+        ihigh : float
+            Upper threshold used for clipping.
+            
+        
+    References
+    ----------
 
-    Returns:
-        tuple: (2-tuple) Boolean numpy array of data clipped data
+    [1] https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.sigmaclip.html
+    [2] https://tkp.readthedocs.io/en/r3.0/devref/tkp/utility/sigmaclip.html
 
     """
 
@@ -78,7 +111,8 @@ def sigmaclip(data, siglow=3., sighigh=3., niter=-100,
         
     return data, ilow, ihigh
 
-@nb.jit
+
+@nb.jit(nogil=True)
 def get_annulus_limits(ann_bin_median, sigma):
 
     ann_bin_median_log = np.log(ann_bin_median)
@@ -89,84 +123,11 @@ def get_annulus_limits(ann_bin_median, sigma):
     return ci_lower, ci_upper
 
 
-@nb.jit
-def compute_bin_threshold(bin_val, ci_lower, ci_upper, alpha=None, sigma=3.0):
+
+
     
-    if len(bin_val)==0:
-        return None
 
-    if not(alpha):
-        alpha = 1./len(bin_val)
-
-    bin_med = np.median(bin_val)
-
-    if bin_med > ci_upper:
-        lthreshold, uthreshold = get_fixed_thresholds(ci_upper, alpha=alpha)
-        bin_val_sel = bin_val[np.where( bin_val<uthreshold) ]
-        if len(bin_val_sel)==0:
-            return 0., 0.
-        bin_ratio = np.mean(bin_val_sel)/np.median(bin_val_sel)
-        if bin_ratio > 1.2:
-            bin_val_sel, low, high = sigmaclip(bin_val_sel, sigma, sigma)
-            uthreshold =np.min(np.array([high, uthreshold]))
-        if len(bin_val_sel)==0:
-            return 0., 0.
-        if np.median(bin_val_sel) > ci_upper:
-            return 0., 0.
-        lthreshold, uthreshold = get_rayleigh_thresholds(bin_val_sel, alpha=alpha)
-    else:
-        lthreshold, uthreshold = get_rayleigh_thresholds(bin_val, alpha=alpha) 
-
-    return lthreshold, uthreshold
-
-
-@nb.jit
-def get_fixed_thresholds(bin_median:float, alpha:float=0., sigma:int=0):
-    """
-    Get thresholds based on a Rayleigh distribution without fitting. Since there 
-    is only one parameter, the median of the bin alone can be used to set the 
-    shape and scale.
-    
-    parameters
-    ----------
-    bin_medians - array-like
-        Median values for each measurement in a bin
-    alpha - float
-        The cumulative distribution function is alpha/2 at the lower threshold, and 
-        1-alpha/2 for the upper threshold (either alpha or sigma is required).
-    sigma - int
-        Level for two-sided confidence interval. Only integer values 1-5 are 
-        accepted.
-    """
-    
-    if (alpha==0 and sigma==0):
-        raise Exception("Please set either alpha of sigma.")
-    
-    if alpha==0:
-        if sigma>0:
-            if sigma==1:
-                alpha=0.31731051
-            elif sigma==2:
-                alpha=0.04550026
-            elif sigma==3:
-                alpha=0.00269980
-            elif sigma==4:
-                alpha=0.00006334
-            elif sigma==5:
-                alpha=0.00000057        
-            else:
-                raise Exception("The value of sigma must be an integer less than 6.")
-            
-    # Determine the single parameter of the Rayleigh distribution from the 
-    # median (https://en.wikipedia.org/wiki/Rayleigh_distribution).
-    sigma_r = bin_median/np.sqrt(2*np.log(2))
-    
-    lthreshold = sigma_r*np.sqrt(-2*np.log(1-alpha/2))
-    uthreshold = sigma_r*np.sqrt(-2*np.log(alpha/2))
-    
-    return lthreshold, uthreshold
-
-@nb.jit
+@nb.jit(nogil=True)
 def get_rayleigh_thresholds(vals, alpha=0.045):
     '''
     Determine the sigma level thresholds for the Rayleigh distribution. 
@@ -270,15 +231,54 @@ def compute_annulus_bins(median_grid, uvbins, nbins):
 
 # ----------------------------------------------------------------------------------------
 
-@nb.jit
-def process_annuli(median_grid, annulus_width, ubins, vbins, sigma=3.):    
+# @nb.jit
+def process_annuli(median_grid, annulus_width, ubins, vbins, sigma=3.): 
+    """
+    Compute upper and lower bounds for a set of annuli of a two dimensional uv grid.
+    
+    Parameters
+    ----------
+    median_grid : numpy.array2d
+        A two dimensional array containing the zero-clipped median values of uv-gridded
+        observations.
+    
+    annulus_width : numpy.array
+        A set of radial widths used to split a uv grid in to a set of annuli.
+    
+    ubins : numpy.array
+        The lambda values defining the lower bound of each bin representing the x-axis in
+        the parameter median_grid.
+
+    vbins : numpy.array
+        The lambda values defining the lower bound of each bin representing the y-axis in
+        the parameter median_grid.
+        
+    sigma : int, optional
+        The statistical significance used to compute the thresholds for each annulus. An 
+        integer below six (default is 3).
+        
+    Returns
+    -------
+    
+    annuli_limits : list(numpy.array)
+        Two lists containing the lower and upper bounds for each annuli. Each list has the
+        same dimension as annulus_width.
+    
+    annuli_grid : numpy.array2d
+        A two dimensional list of the same shape as `median_grid`. Each uv-bin contains an 
+        index corresponding to the annulus to which it belongs. Used with annuli_limits to
+        map thresholds to each uv bin depending on it's radial position.
+    
+    """
 
     annuli_grid = -1*np.ones(median_grid.shape, dtype=np.int32)
     
     u_bins, v_bins = np.where(median_grid>0)
     uv_bins = np.vstack((u_bins, v_bins))
     
-    bin_uv_dist = np.sqrt(ubins[uv_bins[0]]**2 + vbins[uv_bins[1]]**2)
+    #The `-1` in the following line account for the null zeroth row and col in median_grid
+    bin_uv_dist = np.sqrt(ubins[uv_bins[0]-1]**2 + vbins[uv_bins[1]-1]**2)
+
 
     annuli_limits = np.empty( shape=(0, 2), dtype=np.float64 )
     
@@ -293,12 +293,9 @@ def process_annuli(median_grid, annulus_width, ubins, vbins, sigma=3.):
             
             ann_bin_median = np.array([median_grid[u][v] for (u,v) in ann_bin_names])
             
-            print("zero values", len(ann_bin_median)-len(ann_bin_median.nonzero()[0]), "bins", len(ann_bin_median))
-            print("ann_bin_median", ann_bin_median)
-
             ci_lower, ci_upper = get_annulus_limits(ann_bin_median, sigma)
 
-            print("\t med: ", np.median(ann_bin_median), " limits: ", ci_lower, " - ", ci_upper)
+            print("Annulus ", ind , " median: ", np.median(ann_bin_median), " limits: ", ci_lower, " - ", ci_upper)
 
             for (u,v) in ann_bin_names:
                 annuli_grid[u][v] = ind
@@ -308,20 +305,201 @@ def process_annuli(median_grid, annulus_width, ubins, vbins, sigma=3.):
     return annuli_limits, annuli_grid
 
 
+@nb.jit(nogil=True)
+def get_fixed_thresholds(bin_median:float, alpha:float=0., sigma:int=0):
+    """
+    Get thresholds based on a Rayleigh distribution without fitting. Since there 
+    is only one parameter, the median of the bin alone can be used to set the 
+    shape and scale.
+    
+    Parameters
+    ----------
+    bin_medians : numpy.array
+        Median values for each measurement in a bin
+        
+    alpha : float, optional
+        The cumulative distribution function is alpha/2 at the lower threshold, and 
+        1-alpha/2 for the upper threshold (either alpha or sigma is required).
+        
+    sigma : int, optional
+        Level for two-sided confidence interval. Only integer values 1-5 are 
+        accepted.
+        
+    Returns
+    -------
+    lthreshold, uthreshold : float
+        Lower and upper thresholds used for clipping bin values
+        
+    """
+    
+    if (alpha==0 and sigma==0):
+        raise Exception("Please set either alpha of sigma.")
+    
+    if alpha==0:
+        if sigma>0:
+            if sigma==1:
+                alpha=0.31731051
+            elif sigma==2:
+                alpha=0.04550026
+            elif sigma==3:
+                alpha=0.00269980
+            elif sigma==4:
+                alpha=0.00006334
+            elif sigma==5:
+                alpha=0.00000057        
+            else:
+                raise Exception("The value of sigma must be an integer less than 6.")
+            
+    # Determine the single parameter of the Rayleigh distribution from the 
+    # median (https://en.wikipedia.org/wiki/Rayleigh_distribution).
+    sigma_r = bin_median/np.sqrt(2*np.log(2))
+    
+    lthreshold = sigma_r*np.sqrt(-2*np.log(1-alpha/2))
+    uthreshold = sigma_r*np.sqrt(-2*np.log(alpha/2))
+    
+    return lthreshold, uthreshold
 
-@nb.jit
-def flag_one_annulus(uvbin_group, value_group, grid_row_map, annuli_limits, annuli_grid, sigma=3.):
+
+@nb.njit(nogil=True)
+def get_rayleigh_thresholds(bin_median, alpha=0.045):
+    '''
+    Determine the sigma level thresholds for the Rayleigh distribution. 
+    
+    Parameters
+    ----------
+    vals : array-like
+        A list of values for a bin or annulus
+    alpha : float
+        The number to input for the quartile distribution. The output will be
+        the location at which the cululative distribution function will equal
+        alpha/2 and 1-alpha/2. Corresponds roughly to 1-sigma -> 0.3173, 2-
+        sigma = 0.0455, 3-sigma -> 0.0027 for the 68-95-99.7 percent confidence
+        levels.
+        
+    Returns:
+    lthreshold, uthreshold : tuple of floats
+        Represents a two-sided interval for rejecting outliers at a p-value of 
+        alpha/2.
+    '''
+    
+    if (alpha > 1):
+        raise Exception("Invalid value for alpha.")
+    
+    # Determine the single parameter of the Rayleigh distribution from the 
+    # median (https://en.wikipedia.org/wiki/Rayleigh_distribution).
+    sigma = bin_median/np.sqrt(2*np.log(2))
+    
+    lthreshold = sigma*np.sqrt(-2*np.log(1-alpha/2))
+    uthreshold = sigma*np.sqrt(-2*np.log(alpha/2))
+    
+    return lthreshold, uthreshold
+
+    
+
+@nb.njit(nogil=True)
+def compute_bin_threshold(bin_val, ci_lower, ci_upper, sigma):
+    """
+    Contains the logic for clipping values for a uv bin. It takes a list of bin values and
+    the lower and upper thresholds for the annulus corresponding to the bin. This function
+    applies to Rayleigh distributed observations (i.e. the amplitude of any stokes 
+    parameter). If the median of the bin is within the annulus limits, the thresholds are 
+    computed using the confidence interval for the Rayleigh distribution. If the median is 
+    above the annulus threshold, and the distribution is not rayleigh-like, the values are 
+    first sigma clipped (see documentation for function `sigmaclip` above), then Rayleigh 
+    thresholds are applied. If the bin's median is still outside the annulus limits the 
+    bin is then dropped.
+    
+    Parameters
+    ----------
+    bin_val : numpy.array
+        Values for one bin (zeros removed).
+    ci_lower/ci_upper : float
+        Upper and lower bounds for the annulus to which the bin belongs.
+    alpha : float, optional
+        The fractional significance used to clip outliers.
+    sigma : int, optional
+        The integer statistical significance used to clip outlier values.
+        
+    Returns
+    -------
+    lthreshold/uthreshold : float
+        Upper and lower thresholds outside which bin values are flagged
+        
+    
+    """
+    
+    if len(bin_val)==0:
+        return None
+
+#     if not(alpha):
+    alpha = 1./len(bin_val)
+
+    bin_median = np.median(bin_val)
+
+    if bin_median > ci_upper:
+        lthreshold, uthreshold = get_rayleigh_thresholds(ci_upper, alpha)
+        bin_val_sel = bin_val[np.where( bin_val<uthreshold) ]
+        if len(bin_val_sel)==0:
+            return 0., 0.
+        bin_ratio = np.mean(bin_val_sel)/np.median(bin_val_sel)
+        if bin_ratio > 1.2:
+            bin_val_sel, low, high = sigmaclip(bin_val_sel, sigma, sigma, -100, False)
+            uthreshold =np.min(np.array([high, uthreshold]))
+        if len(bin_val_sel)==0:
+            return 0., 0.
+        if np.median(bin_val_sel) > ci_upper:
+            return 0., 0.
+        bin_median = np.median(bin_val_sel)
+        lthreshold, uthreshold = get_rayleigh_thresholds(bin_median, alpha)
+    else:
+        lthreshold, uthreshold = get_rayleigh_thresholds(bin_median, alpha) 
+
+    return lthreshold, uthreshold
+
+
+
+# Change name to annulus_flagger or something better
+@nb.njit(nogil=True)
+def flag_one_annulus(uvbin_group, value_group, grid_row_map, preflags, annuli_limits, annuli_grid, sigma=3.):
+    """
+    Apply annulus thresholds and bin thresholds to each bin in a grid.
+    
+    Parameters
+    ----------
+    uvbin_group : np.array2d
+        List bins and indicies sorted by uv bin.
+    value_group : np.array
+        List values (observations) corresponding to `uvbin_group`.
+    grid_row_map : np.array2d
+        A mapping where each row corresponds to one UV bin and its starting position index
+        in the `uvbin_group` and `value_group` arrays.
+    preflags : numpy.array
+        A list of flags for rows with zero values to append to the flags from this 
+        function.
+    annuli_limits : list(numpy.array)
+        Two lists containing the lower and upper bounds for each annuli. Each list has the
+        same dimension as annulus_width.    
+    annuli_grid : numpy.array2d
+        A two dimensional list of uv-bins containing an index to map bins to annuli.
+        
+    Returns
+    -------
+    median_grid_flg : numpy.array2d
+        A two dimensional list of uv-bins whose value is the median of the flagged bin 
+        values
+    flag_list : numpy.array
+        A list of indicies for flagged observations.
+    
+    """
     
     median_grid_flg = np.zeros(annuli_grid.shape)
     flag_list = np.empty( shape=(0), dtype=np.int64 )
-
-    print("Flag annulus.")
     
     for i_bin, bin_location in enumerate(grid_row_map[:-1]):
         u, v, idx = bin_location
         
-        if not(i_bin%10000):
-            print(i_bin, "/", len(grid_row_map))
+#         if not(i_bin%10000):
+#             print(i_bin, "/", len(grid_row_map))
         
         istart, iend =  grid_row_map[i_bin][2], grid_row_map[i_bin+1][2]
         bin_val = value_group[istart:iend]
@@ -329,7 +507,7 @@ def flag_one_annulus(uvbin_group, value_group, grid_row_map, annuli_limits, annu
         
         (ci_lower, ci_upper) = annuli_limits[annuli_grid[u][v]]
         
-        lthreshold, uthreshold = compute_bin_threshold(bin_val, ci_lower, ci_upper, sigma=sigma)
+        lthreshold, uthreshold = compute_bin_threshold(bin_val, ci_lower, ci_upper, sigma)
         
         bin_flg = bin_ind[np.where((bin_val<=lthreshold) | (bin_val>=uthreshold))]
         bin_val = bin_val[np.where((bin_val>lthreshold) & (bin_val<uthreshold))] 
@@ -339,5 +517,9 @@ def flag_one_annulus(uvbin_group, value_group, grid_row_map, annuli_limits, annu
 
         if len(bin_flg):
             flag_list = np.append(flag_list, bin_flg)
-                
+
+    print("Flag annuli (", len(value_group), " values) ", len(flag_list), " flags")
+
+    flag_list = np.append(flag_list, preflags)
+    
     return median_grid_flg, flag_list
