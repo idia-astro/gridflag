@@ -201,8 +201,8 @@ def dask_partition_sort(a, b, v, p, chunks, binary_chunks, partition_level, clie
     # Bring split point to local process
     sp0 = [r[0] for r in results]
     if client:
-        sp0 = client.compute(sp0)
-        sp0 = [r.result() for r in sp0]
+        sp = client.compute(sp0)
+        sp0 = [r.result() for r in sp]
     else:
         sp0 = np.array([sp.compute() for sp in sp0])
 
