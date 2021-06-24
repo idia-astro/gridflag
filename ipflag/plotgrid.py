@@ -1,15 +1,22 @@
+"""
+
+Notes: 
+    * remove unused scipy.stats models
+"""
+
 import numpy as np
 
 from bokeh.plotting import figure, show
-from bokeh.models import ColumnDataSource, Label
+from bokeh.models import ColumnDataSource, Label, Ellipse, HoverTool, Range1d, PrintfTickFormatter
 from bokeh.palettes import Spectral6, Spectral4
 from bokeh.transform import linear_cmap
 from bokeh.layouts import gridplot 
 from bokeh.io import export_png
 
+
 from bokeh.util.hex import hexbin
 
-from scipy.stats import median_absolute_deviation, gamma, chi2, poisson, expon, lognorm, rice, rayleigh
+from scipy.stats import median_absolute_deviation, gamma, chi2, poisson, expon, lognorm, rice, rayleigh, norm, binom
 
 import dask
 import dask.array as da
@@ -19,7 +26,7 @@ from . import annulus_stats
 from .annulus_stats import get_fixed_thresholds, get_rayleigh_thresholds
 
 
-def plot_uv_grid(median_grid, uvbins, annulus_width, bin_max=None):
+def plot_uv_grid(median_grid, uvbins, annulus_width, metric_name='median', bin_max=None):
 
     uv_bins = np.asarray(median_grid>0).nonzero()
     (u, v) = uv_bins
@@ -34,11 +41,18 @@ def plot_uv_grid(median_grid, uvbins, annulus_width, bin_max=None):
     # Compute color scale to show median values
     if bin_max==None:
         bin_max = np.median(bin_median_values) + 3.*median_absolute_deviation(bin_median_values)
-    print(f"Grid median (of medians): {np.median(bin_median_values):.3f};  Range: median<{bin_max:0.3f}")
+    print(f"Grid median (of {metric_name}s): {np.median(bin_median_values):.4f};  Range: {metric_name}<{bin_max:0.4f}")
     
+    # Median Grid Colors
     value_colors = [
         "#%02x%02x%02x" % (int(r), int(g), 150) for r, g in zip(50+200*bin_median_values/bin_max, 30+200*bin_median_values/bin_max)
     ]
+
+    # Flag density colors
+#     value_colors = [
+#         "#%02x%02x%02x" % (int(r), int(g), 128) for r, g in zip(255-255*bin_median_values/bin_max, 255*bin_median_values/bin_max)
+#     ]
+
 
 #     value_colors = [
 #         "#%02x%02x%02x" % (int(r), int(g), 150) for r, g in zip(255*bin_median_values/bin_max, 255-255*bin_median_values/bin_max)
@@ -52,7 +66,7 @@ def plot_uv_grid(median_grid, uvbins, annulus_width, bin_max=None):
     # Black out all bins with "noise" (this is a naive criteria to detect RMS but it works approximately)
     value_colors[np.where(bin_median_values>bin_max)] = "#000000"
 
-    data=dict(
+    data = dict(
         x_bin_range=x_bin_range,
         y_bin_range=y_bin_range,
         u_bins=u,
@@ -61,17 +75,30 @@ def plot_uv_grid(median_grid, uvbins, annulus_width, bin_max=None):
         medians=bin_median_values
     )
 
+    ann_data = ColumnDataSource(dict(
+        ann_diam=2*annulus_width
+    ))
+
     TOOLS = "hover,crosshair,pan,zoom_in,zoom_out,box_zoom,reset,save,"
 
-    p = figure(title="UV-grid Median Surface",
+    p = figure(title = f"UV Grid {metric_name.capitalize()} Surface", #title="UV-grid Flag Density",
                x_axis_label="U bins", y_axis_label="V bins",
-               tooltips = [('UV bin', '(@u_bins, @v_bins)'), ('Median', '@medians{1.3f}')]
+               match_aspect=True
               )
 
     p.plot_width = 1000
     p.plot_height = 1000
-    p.rect('x_bin_range', 'y_bin_range', width=binwidth[0], height=binwidth[1], source=data, color='value_colors', line_color=None)
-    p.arc(x=[0]*len(annulus_width), y=[0]*len(annulus_width), radius=annulus_width, start_angle=0.0, end_angle=2*np.pi, color="navy", line_dash='dashed', line_width=0.5)
+
+
+    r = p.rect('x_bin_range', 'y_bin_range', width=binwidth[0], height=binwidth[1], source=data, color='value_colors', line_color=None)
+
+    p.ellipse(x=0, y=0, width="ann_diam", height="ann_diam", angle=0, source=ann_data, fill_color="#cab2d6", fill_alpha=0, line_dash='dashed')
+
+
+    h = HoverTool(renderers=[r], tooltips = [('UV bin', '(@u_bins, @v_bins)'), (metric_name, '@medians{0.0000}')])
+    p.add_tools(h)
+
+
     show(p)
     return p, bin_max
 
@@ -254,6 +281,7 @@ def plot_bin_distribution(bin_values, func=None, title='', nbins=50, hrange=None
     bin_count = len(bin_values)
     bin_mean, bin_med = np.mean(bin_values), np.median(bin_values)
     bin_mean_var, bin_med_var = np.std(bin_values), median_absolute_deviation(bin_values)# np.mean(abs(bin_values - bin_med)**2)
+
     bin_ratio = bin_mean / bin_med
 
     p.ray(x=[bin_med], y=[0], length=0, angle=[np.pi/2.], color='red', line_dash='dashed', line_alpha=0.75)
@@ -272,7 +300,10 @@ def plot_bin_distribution(bin_values, func=None, title='', nbins=50, hrange=None
     return params
 
 
-def make_hist_plot(binname, bin_values, nbins, yrange=None, tools=''):
+
+    std = 1.4826 * median_absolute_deviation(tmpmed)
+
+def make_hist_plot(binname, bin_values, nbins, yrange=None, weights=None, tools='', fit_function=norm, fill_color="navy"):
     '''Make a histogram plot of one bin in the UV grid.
     
     Parameters
@@ -292,17 +323,25 @@ def make_hist_plot(binname, bin_values, nbins, yrange=None, tools=''):
     if len(bin_values)==0:
         return None
     
-    n, bins = np.histogram(bin_values, range=yrange, density=False, bins=nbins)
+    n, bins = np.histogram(bin_values, range=yrange, weights=weights, density=False, bins=nbins)
     
     binscenters = np.array([0.5 * (bins[i] + bins[i+1]) for i in range(len(bins)-1)])
     
     scale = np.diff(bins)[0]*np.sum(n)
 
-    params = rayleigh.fit(bin_values)
-    y = scale*rayleigh.pdf(binscenters, *params)
+#     params = rayleigh.fit(bin_values)
+#     y = scale*rayleigh.pdf(binscenters, *params)
+
+# gamma, chi2, poisson, expon, lognorm, rice, rayleigh, norm
+    params = fit_function.fit(bin_values)
+    y = scale*fit_function.pdf(binscenters, *params)
+
+#     print(params)
+#     params = norm.fit(bin_values)
+#     y = scale*norm.pdf(binscenters, *params)
 
     p = figure(title=f'{binname}', tools=tools, plot_width=600, plot_height=400)
-    p.quad(bottom=0, top=n, left=bins[:-1], right=bins[1:], fill_color='navy', alpha=0.7)
+    p.quad(bottom=0, top=n, left=bins[:-1], right=bins[1:], fill_color=fill_color, alpha=0.7)
 
     p.line(binscenters, y, line_color='green', line_dash='5', line_width=2)
     
@@ -310,12 +349,15 @@ def make_hist_plot(binname, bin_values, nbins, yrange=None, tools=''):
     bin_mean, bin_med = np.mean(bin_values), np.median(bin_values)
     bin_mean_var, bin_med_var = np.std(bin_values), median_absolute_deviation(bin_values)# np.mean(abs(bin_values - bin_med)**2)
     bin_ratio = bin_mean / bin_med
+    bin_std = params[1]
 
-
-
+    p.x_range=Range1d(bins[0], bins[-1])
 
     count_text = Label(x=65, y=135, x_units='screen', y_units='screen', text_font_size = "10px", text=f"count: {bin_count}")
     mean_text = Label(x=65, y=125, x_units='screen', y_units='screen', text_font_size = "10px", text=f"mean: {bin_mean:.3f}±{bin_mean_var:.3f}")
+#     mean_text = Label(x=400, y=125, x_units='screen', y_units='screen', text_font_size = "10px", text=f"std: {bin_std:.3f}")
+
+    p.ray(x=[bin_med], y=[0], length=0, angle=[np.pi/2.], color='red', line_dash='dashed', line_alpha=0.75)
 
     if bin_med > 0.209:
         text_color='red'
@@ -329,6 +371,8 @@ def make_hist_plot(binname, bin_values, nbins, yrange=None, tools=''):
     else:
         text_color='black'
 
+    text_color='black'
+
     ratio_text = Label(x=65, y=105, x_units='screen', y_units='screen', text_font_size = "10px", text_color=text_color, text=f"ratio: {bin_ratio:.3f}")
 
     p.add_layout(count_text)
@@ -336,6 +380,10 @@ def make_hist_plot(binname, bin_values, nbins, yrange=None, tools=''):
     p.add_layout(med_text)
     p.add_layout(ratio_text)
     
+    p.xaxis[0].formatter = PrintfTickFormatter(format="%4.1e")
+    p.xaxis.major_label_orientation = np.pi/8
+    p.xaxis.axis_label_text_font_size = '6pt'
+
     return p
 
 
@@ -350,14 +398,14 @@ def plot_bin_grid(value_groups, uvbins, nbins=50, ncols=4):
     show(gridplot(plots, ncols=ncols, plot_width=200, plot_height=200, toolbar_location=None))
 
 
-def plot_bin_grid_2(bin_groups, bin_names, nbins=25, ncols=5, hrange=None):
+def plot_bin_grid_2(bin_groups, bin_names, nbins=25, ncols=5, hrange=None, fit_function=norm):
     plots = []
     for sb, bin_name in zip(bin_groups, bin_names):
         bin_count = len(sb)
 #         bin_name = f"count - {bin_count}"
 #         print(len(sb), len(sb[np.where((sb>hrange[0])&(sb<hrange[1]))]))
         sb_sel = sb #[np.where((sb>hrange[0])&(sb<hrange[1]))]
-        plots.append( make_hist_plot(bin_name, sb_sel, nbins, yrange=hrange) )
+        plots.append( make_hist_plot(bin_name, sb_sel, nbins, yrange=hrange, fit_function=fit_function) )
         
     show(gridplot(plots, ncols=ncols, plot_width=200, plot_height=200, toolbar_location=None))
 

@@ -1,10 +1,12 @@
 import numpy as np
 import numba as nb
 
+# from scipy.stats import median_absolute_deviation
+
 length_checker = np.vectorize(len) 
 
-@nb.jit(nogil=True)
-def median_abs_deviation(x, scale=1.4826):
+# @nb.jit(nogil=True)
+def median_absolute_deviation(x, scale=1.4826):
     """Compute median absolute deviation. Adapted from scipy for use with numba [1].
     
     Parameters
@@ -88,6 +90,9 @@ def sigmaclip(data, siglow=3., sighigh=3., niter=-100,
     for i in range(nniter):
         N = len(data)
 
+        if N < 2:
+            return data, ilow, ihigh
+
         if use_median:
             mean = np.median(data)
         else:
@@ -97,9 +102,6 @@ def sigmaclip(data, siglow=3., sighigh=3., niter=-100,
                 
         ilow = mean - sigma * siglow
         ihigh = mean + sigma * sighigh
-
-        if N < 2:
-            return data, ilow, ihigh
         
         newdata = data[(np.where((data>ilow) & (data<ihigh)))]
         
@@ -110,21 +112,6 @@ def sigmaclip(data, siglow=3., sighigh=3., niter=-100,
         data = newdata
         
     return data, ilow, ihigh
-
-
-@nb.jit(nogil=True)
-def get_annulus_limits(ann_bin_median, sigma):
-
-    ann_bin_median_log = np.log(ann_bin_median)
-    log_limits = [np.median(ann_bin_median_log), median_abs_deviation(ann_bin_median_log)]
-
-    ci_lower, ci_upper = np.exp(log_limits[0] - sigma*log_limits[1]), np.exp(log_limits[0] + sigma*log_limits[1])
-
-    return ci_lower, ci_upper
-
-
-
-
     
 
 @nb.jit(nogil=True)
@@ -229,81 +216,6 @@ def compute_annulus_bins(median_grid, uvbins, nbins):
     return annulus_bins
 
 
-# ----------------------------------------------------------------------------------------
-
-# @nb.jit
-def process_annuli(median_grid, annulus_width, ubins, vbins, sigma=3.): 
-    """
-    Compute upper and lower bounds for a set of annuli of a two dimensional uv grid.
-    
-    Parameters
-    ----------
-    median_grid : numpy.array2d
-        A two dimensional array containing the zero-clipped median values of uv-gridded
-        observations.
-    
-    annulus_width : numpy.array
-        A set of radial widths used to split a uv grid in to a set of annuli.
-    
-    ubins : numpy.array
-        The lambda values defining the lower bound of each bin representing the x-axis in
-        the parameter median_grid.
-
-    vbins : numpy.array
-        The lambda values defining the lower bound of each bin representing the y-axis in
-        the parameter median_grid.
-        
-    sigma : int, optional
-        The statistical significance used to compute the thresholds for each annulus. An 
-        integer below six (default is 3).
-        
-    Returns
-    -------
-    
-    annuli_limits : list(numpy.array)
-        Two lists containing the lower and upper bounds for each annuli. Each list has the
-        same dimension as annulus_width.
-    
-    annuli_grid : numpy.array2d
-        A two dimensional list of the same shape as `median_grid`. Each uv-bin contains an 
-        index corresponding to the annulus to which it belongs. Used with annuli_limits to
-        map thresholds to each uv bin depending on it's radial position.
-    
-    """
-
-    annuli_grid = -1*np.ones(median_grid.shape, dtype=np.int32)
-    
-    u_bins, v_bins = np.where(median_grid>0)
-    uv_bins = np.vstack((u_bins, v_bins))
-    
-    #The `-1` in the following line account for the null zeroth row and col in median_grid
-    bin_uv_dist = np.sqrt(ubins[uv_bins[0]-1]**2 + vbins[uv_bins[1]-1]**2)
-
-
-    annuli_limits = np.empty( shape=(0, 2), dtype=np.float64 )
-    
-    for ind, edge in enumerate(annulus_width):
-            minuv=0
-            if ind:
-                minuv = annulus_width[ind-1]
-            maxuv = annulus_width[ind]
-
-            ann_bin_index = np.where((bin_uv_dist > minuv) & (bin_uv_dist < maxuv))[0]
-            ann_bin_names = np.array([(uv[0],uv[1]) for uv in uv_bins[:,ann_bin_index].T])
-            
-            ann_bin_median = np.array([median_grid[u][v] for (u,v) in ann_bin_names])
-            
-            ci_lower, ci_upper = get_annulus_limits(ann_bin_median, sigma)
-
-            print("Annulus ", ind , " median: ", np.median(ann_bin_median), " limits: ", ci_lower, " - ", ci_upper)
-
-            for (u,v) in ann_bin_names:
-                annuli_grid[u][v] = ind
-
-            annuli_limits = np.append(annuli_limits, np.array([[ci_lower, ci_upper]]), axis=0)
-
-    return annuli_limits, annuli_grid
-
 
 @nb.jit(nogil=True)
 def get_fixed_thresholds(bin_median:float, alpha:float=0., sigma:int=0):
@@ -360,6 +272,96 @@ def get_fixed_thresholds(bin_median:float, alpha:float=0., sigma:int=0):
     return lthreshold, uthreshold
 
 
+
+# @nb.jit(nogil=True)
+def get_annulus_limits(ann_bin_median, sigma):
+
+    ann_bin_median_log = np.log(ann_bin_median)
+    log_limits = [np.median(ann_bin_median_log), median_absolute_deviation(ann_bin_median_log)]
+
+    ci_lower, ci_upper = np.exp(log_limits[0] - sigma*log_limits[1]), np.exp(log_limits[0] + sigma*log_limits[1])
+
+    return ci_lower, ci_upper
+
+
+# ----------------------------------------------------------------------------------------
+
+# @nb.jit
+def process_annuli(median_grid, annulus_width, ubins, vbins, sigma=3.): 
+    """
+    Compute upper and lower bounds for a set of annuli of a two dimensional uv grid.
+    
+    Parameters
+    ----------
+    median_grid : numpy.array2d
+        A two dimensional array containing the zero-clipped median values of uv-gridded
+        observations.
+    
+    annulus_width : numpy.array
+        A set of radial widths used to split a uv grid in to a set of annuli.
+    
+    ubins : numpy.array
+        The lambda values defining the lower bound of each bin representing the x-axis in
+        the parameter median_grid.
+
+    vbins : numpy.array
+        The lambda values defining the lower bound of each bin representing the y-axis in
+        the parameter median_grid.
+        
+    sigma : int, optional
+        The statistical significance used to compute the thresholds for each annulus. An 
+        integer below six (default is 3).
+        
+    Returns
+    -------
+    
+    annuli_limits : list(numpy.array)
+        Two lists containing the lower and upper bounds for each annuli. Each list has the
+        same dimension as annulus_width.
+    
+    annuli_grid : numpy.array2d
+        A two dimensional list of the same shape as `median_grid`. Each uv-bin contains an 
+        index corresponding to the annulus to which it belongs. Used with annuli_limits to
+        map thresholds to each uv bin depending on it's radial position.
+    
+    """
+
+    annuli_grid = -1*np.ones(median_grid.shape, dtype=np.int32)
+    
+    u_bins, v_bins = np.where(median_grid>0)
+    uv_bins = np.vstack((u_bins, v_bins))
+    
+    #The `-1` in the following line account for the null zeroth row and col in median_grid
+    bin_uv_dist = np.sqrt(ubins[uv_bins[0]-1]**2 + vbins[uv_bins[1]-1]**2)
+
+    annuli_limits = np.empty( shape=(0, 2), dtype=np.float64 )
+    
+    for ind, edge in enumerate(annulus_width):
+            minuv=0
+            if ind:
+                minuv = annulus_width[ind-1]
+            maxuv = annulus_width[ind]
+
+            ann_bin_index = np.where((bin_uv_dist > minuv) & (bin_uv_dist < maxuv))[0]
+            ann_bin_names = np.array([(uv[0],uv[1]) for uv in uv_bins[:,ann_bin_index].T])
+            
+            ann_bin_median = np.array([median_grid[u][v] for (u,v) in ann_bin_names])
+            
+            ci_lower, ci_upper = get_annulus_limits(ann_bin_median, sigma)
+
+            print("Annulus ", ind , " median: ", np.median(ann_bin_median), " limits: ", ci_lower, " - ", ci_upper)
+
+            for (u,v) in ann_bin_names:
+                annuli_grid[u][v] = ind
+
+            annuli_limits = np.append(annuli_limits, np.array([[ci_lower, ci_upper]]), axis=0)
+
+    return annuli_limits, annuli_grid
+
+
+# ----------------------------------------------------------------------------------------
+
+
 @nb.njit(nogil=True)
 def get_rayleigh_thresholds(bin_median, alpha=0.045):
     '''
@@ -394,8 +396,19 @@ def get_rayleigh_thresholds(bin_median, alpha=0.045):
     
     return lthreshold, uthreshold
 
-    
 
+
+# @nb.njit(
+#     nb.types.Tuple(
+#         (nb.float64, nb.float64)
+#     )(nb.float32[:,:], nb.float64, nb.float64, nb.float64),
+#     locals={
+#         "alpha": nb.float64,
+#         "bin_median": nb.float32,
+#         "bin_ratio": nb.float32
+#     },
+#     nogil=True
+# )
 @nb.njit(nogil=True)
 def compute_bin_threshold(bin_val, ci_lower, ci_upper, sigma):
     """
@@ -405,9 +418,9 @@ def compute_bin_threshold(bin_val, ci_lower, ci_upper, sigma):
     parameter). If the median of the bin is within the annulus limits, the thresholds are 
     computed using the confidence interval for the Rayleigh distribution. If the median is 
     above the annulus threshold, and the distribution is not rayleigh-like, the values are 
-    first sigma clipped (see documentation for function `sigmaclip` above), then Rayleigh 
-    thresholds are applied. If the bin's median is still outside the annulus limits the 
-    bin is then dropped.
+    first sigma clipped (see documentation for function `sigmaclip' above), then Rayleigh 
+    thresholds are applied. Finally, if the bin's median is still outside the annulus 
+    limits, the bin is dropped.
     
     Parameters
     ----------
@@ -424,32 +437,37 @@ def compute_bin_threshold(bin_val, ci_lower, ci_upper, sigma):
     -------
     lthreshold/uthreshold : float
         Upper and lower thresholds outside which bin values are flagged
-        
-    
+
     """
     
     if len(bin_val)==0:
-        return None
+        return -1., -1.
 
 #     if not(alpha):
-    alpha = 1./len(bin_val)
+    alpha = 1./(2*len(bin_val))
 
     bin_median = np.median(bin_val)
 
-    if bin_median > ci_upper:
-        lthreshold, uthreshold = get_rayleigh_thresholds(ci_upper, alpha)
-        bin_val_sel = bin_val[np.where( bin_val<uthreshold) ]
-        if len(bin_val_sel)==0:
+    bin_ratio = np.mean(bin_val)/bin_median
+
+    if (bin_median > ci_upper) or (bin_ratio > 1.2):
+
+#         lthreshold, uthreshold = get_rayleigh_thresholds(ci_upper, alpha)
+#         bin_val = bin_val[np.where( bin_val<uthreshold) ]
+# 
+#         if len(bin_val)==0:
+#             return 0., 0.
+#         bin_ratio = np.mean(bin_val)/np.median(bin_val)
+
+        bin_val, low, high = sigmaclip(bin_val, sigma, sigma, -100, False)
+        uthreshold = np.min(np.array([high, ci_upper]))
+
+        if len(bin_val)==0:
             return 0., 0.
-        bin_ratio = np.mean(bin_val_sel)/np.median(bin_val_sel)
-        if bin_ratio > 1.2:
-            bin_val_sel, low, high = sigmaclip(bin_val_sel, sigma, sigma, -100, False)
-            uthreshold =np.min(np.array([high, uthreshold]))
-        if len(bin_val_sel)==0:
+        if np.median(bin_val) > ci_upper:
             return 0., 0.
-        if np.median(bin_val_sel) > ci_upper:
-            return 0., 0.
-        bin_median = np.median(bin_val_sel)
+
+        bin_median = np.median(bin_val)
         lthreshold, uthreshold = get_rayleigh_thresholds(bin_median, alpha)
     else:
         lthreshold, uthreshold = get_rayleigh_thresholds(bin_median, alpha) 
@@ -487,39 +505,60 @@ def flag_one_annulus(uvbin_group, value_group, grid_row_map, preflags, annuli_li
     median_grid_flg : numpy.array2d
         A two dimensional list of uv-bins whose value is the median of the flagged bin 
         values
-    flag_list : numpy.array
-        A list of indicies for flagged observations.
-    
+    flag_count_grid : array of shape (ubins, vbins)
+        A uv-bin grid with flag count for each cell.
+    flag_list : array of int64
+        A list of indicies for the position in the input measurement set for flagged visibilities.
+    val_flag_pos : array of int64
+        The list of flags in the position of the trasnformed, binned data to use for 
+        analysis and plotting.
     """
     
     median_grid_flg = np.zeros(annuli_grid.shape)
+    flag_count_grid = np.zeros(annuli_grid.shape)
     flag_list = np.empty( shape=(0), dtype=np.int64 )
+    
+    val_flag_pos = np.empty( shape=(0), dtype=np.int64)
+
+    print("Value group shape (flag_one_annulus): ", value_group.shape)
+
+    print("Flagging ", len(uvbin_group), " rows in ", len(grid_row_map), " bins." )
     
     for i_bin, bin_location in enumerate(grid_row_map[:-1]):
         u, v, idx = bin_location
         
-#         if not(i_bin%10000):
-#             print(i_bin, "/", len(grid_row_map))
-        
+        # if not(i_bin%1000):
+        #     print(i_bin, "/", len(grid_row_map))            
+
         istart, iend =  grid_row_map[i_bin][2], grid_row_map[i_bin+1][2]
         bin_val = value_group[istart:iend]
         bin_ind = uvbin_group[istart:iend,2]
-        
+
         (ci_lower, ci_upper) = annuli_limits[annuli_grid[u][v]]
-        
+
         lthreshold, uthreshold = compute_bin_threshold(bin_val, ci_lower, ci_upper, sigma)
+
+        flag_mask = np.where((bin_val<=lthreshold) | (bin_val>=uthreshold))
+
+        # Save unflagged visibilities for analytics on flagged data
+        bin_flag_pos = istart + flag_mask[0]
         
-        bin_flg = bin_ind[np.where((bin_val<=lthreshold) | (bin_val>=uthreshold))]
+        bin_flg = bin_ind[flag_mask]
         bin_val = bin_val[np.where((bin_val>lthreshold) & (bin_val<uthreshold))] 
-        
+
         if len(bin_val)>0:
             median_grid_flg[u][v] = np.median(bin_val)
 
         if len(bin_flg):
             flag_list = np.append(flag_list, bin_flg)
+            val_flag_pos = np.append(val_flag_pos, bin_flag_pos)
 
-    print("Flag annuli (", len(value_group), " values) ", len(flag_list), " flags")
+        flag_count_grid[u][v] = len(bin_flg)
+
+    print( "Flagged ", int(100*len(flag_list)/len(value_group)), " % (", len(flag_list), " of ", len(value_group), " values) in ", len(grid_row_map), " bins." ) 
+
+    # print("Flagged ", 100*len(flag_list)/len(value_group), "% of ", len(grid_row_map), " bins (", len(value_group), " values) with ", len(flag_list), " total flags")
 
     flag_list = np.append(flag_list, preflags)
     
-    return median_grid_flg, flag_list
+    return median_grid_flg, flag_count_grid, flag_list, val_flag_pos

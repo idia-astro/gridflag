@@ -214,12 +214,16 @@ class ListObs:
         fieldName = fields['data_vars']['NAME']['data']
         sourceID = fields['data_vars']['SOURCE_ID']['data']
         ref_dir = fields['data_vars']['REFERENCE_DIR']['data']
-        epoch = self.fields[1]['REFERENCE_DIR']['MEASINFO']['Ref']
+        try:
+            epoch = self.fields[1]['REFERENCE_DIR']['MEASINFO']['Ref']
+        except:
+            epoch = '-'
 
         nrow = np.shape(fieldName)[0]
 
         nfields = nrow
         fields_attrs = []
+
 
         group_cols = ["FIELD_ID"]
         ds_grouped = xds_from_table(self.filename, column_keywords=True, group_cols=group_cols)
