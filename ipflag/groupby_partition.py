@@ -48,8 +48,8 @@ def sort_bins(uvbins, values, flags=None):
 
     if not flags is None:
         flg_idx = np.where(flags==True)
-        print("Removing {:.2f}% of rows, {} pre-existing flags".format( 
-            (len(flags) - len(flg_idx[0]))/len(flags), (len(flags) - len(flg_idx[0])))
+        print("MS file flags:\t Removed {:.2f}% - {}/{} rows.".format( 
+            100*(len(flags) - len(flg_idx[0]))/len(flags), (len(flags) - len(flg_idx[0])), len(values))
         )
         values = values[flg_idx]
         uvbins = uvbins[np.where(flags==True)]
@@ -57,8 +57,9 @@ def sort_bins(uvbins, values, flags=None):
     null_flags = uvbins[np.where(values==0)]
 
     uvbins = uvbins[np.where(values!=0)]
-    print("Zero values removed: {:.2f}% of {} values, {} remaining".format(
-        100*len(null_flags)/float(len(values)), len(values), len(uvbins)))
+    print("Zero values:\t Removed {:.2f}% - {}/{} rows.".format(
+        100*len(null_flags)/float(len(values)), len(null_flags), len(values))
+    )
 
     values = values[np.where(values!=0)]
 
@@ -73,8 +74,8 @@ def sort_bins_multi(uvbins, values, flags=None):
 
     if not flags is None:
         flg_idx = np.where(flags==True)
-        print("Removing {:.2f}% of rows, {} pre-existing flags".format( 
-            (len(flags) - len(flg_idx[0]))/len(flags), (len(flags) - len(flg_idx[0])))
+        print("MS file flags:\t Removed {:.2f}% - {}/{} rows.".format( 
+            100*(len(flags) - len(flg_idx[0]))/len(flags), (len(flags) - len(flg_idx[0])), len(values))
         )
         values = values[flg_idx]
         uvbins = uvbins[np.where(flags==True)]
@@ -85,25 +86,27 @@ def sort_bins_multi(uvbins, values, flags=None):
     null_flags = uvbins[null_idx]
 
     uvbins = uvbins[pos_idx]
-    print("Zero values removed: {:.2f}% of {} values, {} remaining".format(
-        100*len(null_flags)/float(len(values)), len(values), len(uvbins))
+    print("Zero values:\t Removed {:.2f}% - {}/{} rows.".format(
+        100*len(null_flags)/float(len(values)), len(null_flags), len(values))
     )
     values = values[pos_idx]
 
     return uvbins, values, null_flags[:,2]
 
 
-@nb.njit(
-    nb.types.Tuple(
-        (nb.int64[:,::1], nb.float32[:,::1], nb.int64[:,::1], nb.int64[::1])
-    )(nb.int64[:,::1], nb.float32[:,::1], nb.int64[::1]),
-    locals={
-        "ubin_prev": nb.int64,
-        "vbin_prev": nb.int64,
-        "k": nb.uint32
-    },
-    nogil=True
-)
+
+# @nb.njit(
+#     nb.types.Tuple(
+#         (nb.int64[:,::1], nb.float32[:,::1], nb.int64[:,::1], nb.int64[::1])
+#     )(nb.int64[:,::1], nb.float32[:,::1], nb.int64[::1]),
+#     locals={
+#         "ubin_prev": nb.int64,
+#         "vbin_prev": nb.int64,
+#         "k": nb.uint32
+#     },
+#     nogil=True
+# )
+@nb.njit(nogil=True)
 def create_bin_groups_sort(uvbins, values, null_flags):
     """
     Sort U and V bins for a partition of a dataset such that uv bins are contiguous 

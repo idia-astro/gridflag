@@ -555,7 +555,7 @@ def flag_one_annulus(uvbin_group, value_group, grid_row_map, preflags, annuli_li
 
         flag_count_grid[u][v] = len(bin_flg)
 
-    print( "Flagged ", int(100*len(flag_list)/len(value_group)), " % (", len(flag_list), " of ", len(value_group), " values) in ", len(grid_row_map), " bins." ) 
+    print( "Flagged ", int(100*len(flag_list)/len(value_group)), "% (", len(flag_list), " of ", len(value_group), " values) in ", len(grid_row_map), " bins." ) 
 
     # print("Flagged ", 100*len(flag_list)/len(value_group), "% of ", len(grid_row_map), " bins (", len(value_group), " values) with ", len(flag_list), " total flags")
 

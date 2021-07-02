@@ -147,6 +147,21 @@ def plot_rms_vs_dist(value_grids, names, uvbins, grid_row_map, n_annulus=20, tit
     show(p)
     
 
+def get_thresholds(vals, alpha=0.045):
+    
+    if (alpha > 1):
+        print("Invalid value for alpha.")
+    # The sample median
+    median = np.median(vals)
+    
+    # Determine the single parameter of the Rayleigh distribution from the 
+    # median (https://en.wikipedia.org/wiki/Rayleigh_distribution).
+    sigma = median/np.sqrt(2*np.log(2))
+    
+    lthreshold = sigma*np.sqrt(-2*np.log(1-alpha/2))
+    uthreshold = sigma*np.sqrt(-2*np.log(alpha/2))
+    
+    return lthreshold, uthreshold
 
 def plot_amp_dist_bins(median_grid, uvbins, grid_row_map, annulus_width=[], n=10000, title="Median Amplitude"):
 
@@ -185,9 +200,9 @@ def plot_amp_dist_bins(median_grid, uvbins, grid_row_map, annulus_width=[], n=10
         ("count", "@count")
     ]
 
-    p = figure(title=f"UV Distance vs. {title}", tools=TOOLS, plot_width=1000, plot_height=400, tooltips=TOOLTIPS, x_axis_label="UV Distance", y_axis_label=f"{title} (Jy)")
+    p = figure(title=f"UV Distance vs. {title}", tools=TOOLS, plot_width=1200, plot_height=400, tooltips=TOOLTIPS, x_axis_label="UV Distance", y_axis_label=f"{title} (Jy)")
 
-    p.scatter(x='x', y='y', fill_color=uv_colors, fill_alpha=0.7, line_color=None, source=source)
+    p.scatter(x='x', y='y', fill_color='blue', fill_alpha=0.2, line_color=None, source=source)
 
     if len(annulus_width):
         for ind, edge in enumerate(annulus_width):
@@ -198,12 +213,13 @@ def plot_amp_dist_bins(median_grid, uvbins, grid_row_map, annulus_width=[], n=10
             ann_bin = bin_median_values[np.where((bin_uv_dist>minuv) & (bin_uv_dist<maxuv))]
             mean_median_amp = np.median(ann_bin)
             mad_amp = median_absolute_deviation(ann_bin)
-            rlower, rupper = get_rayleigh_thresholds(ann_bin)
-            p.line([minuv, maxuv], [mean_median_amp, mean_median_amp], line_color='black', line_dash='dashed', line_alpha=0.75)
-            p.line([minuv, maxuv], [rlower, rlower], line_color='gray', line_dash='dashed', line_alpha=0.75)
-            p.line([minuv, maxuv], [rupper, rupper], line_color='gray', line_dash='dashed', line_alpha=0.75)
+            rlower, rupper = get_thresholds(ann_bin, alpha=0.2)
+            p.line([minuv, maxuv], [mean_median_amp, mean_median_amp], line_color='black', line_width=4., line_dash='dashed', line_alpha=0.9)
+            p.line([minuv, maxuv], [rlower, rlower], line_color='red', line_width=2., line_dash='dashed', line_alpha=0.9)
+            p.line([minuv, maxuv], [rupper, rupper], line_color='red', line_width=2., line_dash='dashed', line_alpha=0.9)
+            p.rect(x=[(minuv+maxuv)/2], y=[(rupper+rlower)/2], width=(maxuv-minuv), height=(rupper-rlower), color="grey", alpha=0.3)
 
-            print(f'Annulus ({minuv:<6}- {maxuv:<6} lambda)\tcount: {len(ann_bin):<6}\tmedian: {mean_median_amp:.3f}\tmad: {mad_amp:.3f}')
+            print(f'Annulus ({minuv:<6}- {maxuv:<6} lambda)\tcount: {len(ann_bin):<6}\tmedian: {mean_median_amp:.3f}\tmad: {mad_amp:.3f}, {rlower}-{rupper}')
 
     show(p)
 
