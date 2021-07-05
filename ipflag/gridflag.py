@@ -410,7 +410,14 @@ def dask_partition_sort(a, b, v, f, p, chunks, binary_chunks, partition_level, c
     return split_points, a, b, v, f, p
 
 
-def compute_median_grid(ds_ind, data_columns, uvbins, partition_level=4, stokes='I', client=None):
+def compute_median_grid(
+    ds_ind, 
+    data_columns, 
+    uvbins, 
+    partition_level=4, 
+    stokes='I', 
+    client=None
+):
 
     print("Load in-memory data for sort.")
     ubins = ds_ind.U_bins.data
@@ -434,7 +441,8 @@ def compute_median_grid(ds_ind, data_columns, uvbins, partition_level=4, stokes=
         # Logical OR of all pol state columns
         flags = da.sum(ds_ind.FLAG.data, axis=1, dtype=np.bool)
     else:
-        raise ValueError(f"compute_ipflag_grid: the stokes argument, '{stokes}', is not currently implemented, please select another value.")
+        raise ValueError(f"compute_ipflag_grid: the stokes argument, '{stokes}',\
+                    is not currently implemented, please select another value.")
 
     #Comute chunks
     chunks = list(ubins.chunks[0])
@@ -443,8 +451,21 @@ def compute_median_grid(ds_ind, data_columns, uvbins, partition_level=4, stokes=
     p = da.arange(len(ds_ind.newrow), dtype=np.int64, chunks=ubins.chunks)
 
     print("Compute parallel partitions and do partial sort.")
-    split_points, ubins_part, vbins_part, vals_part, flags_part, p_part = dask_partition_sort(
-        ubins, vbins, vals, flags, p, chunks, partition_level, 0, client=client)
+    split_points, 
+    ubins_part, 
+    vbins_part, 
+    vals_part, 
+    flags_part, 
+    p_part = dask_partition_sort(ubins, 
+                                 vbins, 
+                                 vals, 
+                                 flags, 
+                                 p, 
+                                 chunks, 
+                                 partition_level, 
+                                 0, 
+                                 client=client
+                                 )
 
     print("Preparing dask delayed...")
     dd_bins = da.stack([ubins_part, vbins_part, p_part]).T
@@ -463,9 +484,16 @@ def compute_median_grid(ds_ind, data_columns, uvbins, partition_level=4, stokes=
 
     # group_bins_sort = [dask.delayed(groupby_partition.sort_bins)(part[0][0], part[1]) for part in zip(dd_bins, dd_vals)] 
     if vdim > 1:
-        group_bins_sort = [dask.delayed(groupby_partition.sort_bins_multi)(part[0][0], part[1][0], part[2]) for part in zip(dd_bins, dd_vals, dd_flags)]
+        group_bins_sort = [dask.delayed(groupby_partition.sort_bins_multi)(
+                            part[0][0], 
+                            part[1][0], 
+                            part[2]) for part in zip(dd_bins, dd_vals, dd_flags)]
     else:
-        group_bins_sort = [dask.delayed(groupby_partition.sort_bins)(part[0][0], part[1], part[2]) for part in zip(dd_bins, dd_vals, dd_flags)]
+        group_bins_sort = [dask.delayed(groupby_partition.sort_bins)(
+                            part[0][0], 
+                            part[1], 
+                            part[2]
+                            ) for part in zip(dd_bins, dd_vals, dd_flags)]
 
     group_chunks = [dask.delayed(groupby_partition.create_bin_groups_sort)(c[0], c[1], c[2]) for c in group_bins_sort] 
     function_chunks = [dask.delayed(groupby_partition.apply_grid_median)(c[1], c[2]) for c in group_chunks]
@@ -477,9 +505,46 @@ def compute_median_grid(ds_ind, data_columns, uvbins, partition_level=4, stokes=
         median_grid = median_grid.compute()
 
     return median_grid
-        
 
-def map_amplitude_grid(ds_ind, data_columns, stokes='I', chunk_size:int=10**6, return_index:bool=False):
+
+def check_exising_flags(ds_ind, stokes='I', client=None):
+    """ Check the existing flags in the input Measurement Set."""
+    
+    # Determine which polarization state to grid and flag
+    if stokes=='I':
+        flags = ds_ind.FLAG.data[:,0] | ds_ind.FLAG.data[:,-1]
+    elif stokes=='Q':
+        flags = ds_ind.FLAG.data[:,0] | ds_ind.FLAG.data[:,-1]
+    elif stokes=='U':
+        flags = ds_ind.FLAG.data[:,1] | ds_ind.FLAG.data[:,2]
+    elif stokes=='V':
+        flags = ds_ind.FLAG.data[:,1] | ds_ind.FLAG.data[:,2]
+    elif stokes=='A':
+        flags = da.sum(ds_ind.FLAG.data, axis=1, dtype=np.bool)
+    else:
+        raise ValueError(f"check_existing_flags: the stokes argument, \
+        '{stokes}', is not currently implemented, please select another value.")
+    
+    flag_loc = da.where(flags==True)
+    if not client is None:
+        flag_loc = client.compute(flag_loc)
+    else: 
+        flag_loc = flag_loc[0].compute()
+
+    nflags = len(flag_loc)
+    nrows = len(flags)
+    
+    print( f"Rows alrady flagged: {(100*nflags/nrows):.1f}% ({nflags}/{nrows}),\
+ in file \"{ds_ind.attrs['Measurement Set']}\"." ) 
+
+
+def map_amplitude_grid(
+    ds_ind, 
+    data_columns, 
+    stokes='I', 
+    chunk_size:int=10**6, 
+    return_index:bool=False
+):
     """    
     Map functions to a concurrent dask functions to an Xarray dataset with 
     pre-computed grid indicies.
@@ -515,12 +580,15 @@ def map_amplitude_grid(ds_ind, data_columns, stokes='I', chunk_size:int=10**6, r
     # Get dask arrays of UV-bins and visibilities from XArray dataset
     dd_ubins = ds_ind.U_bins.data
     dd_vbins = ds_ind.V_bins.data
-    dd_flgs = (ds_ind.FLAG[:,data_columns[0]].data | ds_ind.FLAG[:,data_columns[1]].data)
+    dd_flgs = (ds_ind.FLAG[:,data_columns[0]].data | 
+               ds_ind.FLAG[:,data_columns[1]].data)
 
     if stokes=='I':
-        dd_vals = (np.absolute(ds_ind.DATA[:,data_columns[0]].data + ds_ind.DATA[:,data_columns[1]].data))
+        dd_vals = (np.absolute(ds_ind.DATA[:,data_columns[0]].data + 
+                               ds_ind.DATA[:,data_columns[1]].data))
     elif stokes=='Q':
-        dd_vals = (np.absolute(ds_ind.DATA[:,data_columns[0]].data - ds_ind.DATA[:,data_columns[1]].data))
+        dd_vals = (np.absolute(ds_ind.DATA[:,data_columns[0]].data - 
+                               ds_ind.DATA[:,data_columns[1]].data))
 
     # Combine U and V bins into one dask array
     dd_bins = da.stack([dd_ubins, dd_vbins]).T
@@ -536,7 +604,16 @@ def map_amplitude_grid(ds_ind, data_columns, stokes='I', chunk_size:int=10**6, r
     flg_partitions = dd_flgs.to_delayed()
 
     # Compute indicies for each bin in the grid for each chunk
-    group_chunks = [dask.delayed(groupby_apply.group_bin_flagval_wrap)(part[0][0], part[1], part[2], init_index=(chunk_size*kth)) for kth, part in enumerate(zip(bin_partitions, val_partitions, flg_partitions))]    
+    group_chunks = [dask.delayed(groupby_apply.group_bin_flagval_wrap)(
+                            part[0][0], 
+                            part[1], 
+                            part[2], 
+                            init_index=(chunk_size*kth)
+                            ) for kth, part in enumerate(zip(bin_partitions, 
+                                                             val_partitions, 
+                                                             flg_partitions)
+                                                        )
+                    ]    
     groups = dask.delayed(groupby_apply.combine_group_flagval)(group_chunks)
 
 #     group_chunks = [dask.delayed(groupby_apply.group_bin_idx_val_wrap)(part[0][0], part[1]) for part in zip(bin_partitions, val_partitions)]    

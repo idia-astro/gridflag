@@ -343,7 +343,8 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
     print(f"\nProcessed {ndd} unique data description IDs comprising {nrows} rows.")
 
     ds_ind = xr.concat(ds_bindex, dim="newrow")
-
+    ds_ind.attrs = {'Measurement Set': msfile, 'Field': fieldid}
+    
     return ds_ind, uvbins
 
 
@@ -553,6 +554,7 @@ def load_ms_file_splitspw(msfile, fieldid=None, datacolumn='DATA', method='physi
     print(f"\nProcessed {ndd} unique data description IDs comprising {nrows} rows.")
 
     ds_ind = xr.concat(ds_bindex, dim="newrow")
+    ds_ind.attrs = {'Measurement Set': msfile}
 
     return ds_ind, uvbins
 

@@ -47,12 +47,14 @@ def sort_bins(uvbins, values, flags=None):
     values = values[idx]
 
     if not flags is None:
-        flg_idx = np.where(flags==True)
+        flags = flags[idx]
+        # Find indicies of rows to keep
+        flg_idx = np.where(flags==False)
         print("MS file flags:\t Removed {:.2f}% - {}/{} rows.".format( 
             100*(len(flags) - len(flg_idx[0]))/len(flags), (len(flags) - len(flg_idx[0])), len(values))
         )
         values = values[flg_idx]
-        uvbins = uvbins[np.where(flags==True)]
+        uvbins = uvbins[flg_idx]
 
     null_flags = uvbins[np.where(values==0)]
 
@@ -73,12 +75,14 @@ def sort_bins_multi(uvbins, values, flags=None):
     values = values[idx]
 
     if not flags is None:
-        flg_idx = np.where(flags==True)
+        flags = flags[idx]
+        # Find indicies of rows to keep
+        flg_idx = np.where(flags==False)
         print("MS file flags:\t Removed {:.2f}% - {}/{} rows.".format( 
             100*(len(flags) - len(flg_idx[0]))/len(flags), (len(flags) - len(flg_idx[0])), len(values))
         )
         values = values[flg_idx]
-        uvbins = uvbins[np.where(flags==True)]
+        uvbins = uvbins[flg_idx]
 
     # Filter rows with zero values (often this is done by pre-flagging)
     null_idx = np.where(np.sum(values, axis=1)==0.)
@@ -362,8 +366,8 @@ def partition_permutation(a, b, v, f, p, pivot):
     nogil=True
 )
 def partition_permutation_multi(a, b, v, f, p, pivot):
-    ''' Apply a partition to the first input array using the pivot point, p and sort all 
-        the input arrays according to this partial sort.
+    ''' Apply a partition to the first input array using the pivot point, p and 
+    sort all the input arrays according to this partial sort.
 
     Parameters
     ----------
