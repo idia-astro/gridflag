@@ -562,7 +562,7 @@ def load_ms_file_splitspw(msfile, fieldid=None, datacolumn='DATA', method='physi
 
 
 
-def write_ms_file(msfile, ds_ind, flag_ind_list, fieldid, data_columns, overwrite=False, datacolumn="DATA", chunk_size=10**6, client=None):
+def write_ms_file(msfile, ds_ind, flag_ind_list, fieldid, stokes='I', overwrite=False, datacolumn="DATA", chunk_size=10**6, client=None):
     """ Convert flags to the correct format and write flag column to a 
     measurement set (MS).
 
@@ -590,6 +590,9 @@ def write_ms_file(msfile, ds_ind, flag_ind_list, fieldid, data_columns, overwrit
     print("Create empty flag column.")
     flag_ind_col = np.zeros((len(ds_ind.newrow)), dtype=bool)
     flag_ind_col[flag_ind_list] = True
+
+    if stokes=='I':
+        data_columns = [0, -1]
 
     print("Rearange and combine flags for pol states and cols.")
     for col in data_columns:

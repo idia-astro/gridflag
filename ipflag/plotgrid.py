@@ -6,7 +6,7 @@ Notes:
 
 import numpy as np
 
-from bokeh.plotting import figure, show
+from bokeh.plotting import figure, show, save
 from bokeh.models import ColumnDataSource, Label, Ellipse, HoverTool, Range1d, PrintfTickFormatter
 from bokeh.palettes import Spectral6, Spectral4
 from bokeh.transform import linear_cmap
@@ -26,7 +26,7 @@ from . import annulus_stats
 from .annulus_stats import get_fixed_thresholds, get_rayleigh_thresholds
 
 
-def plot_uv_grid(median_grid, uvbins, annulus_width, metric_name='median', bin_max=None):
+def plot_uv_grid(median_grid, uvbins, annulus_width, metric_name='median', filename=None, bin_max=None):
 
     uv_bins = np.asarray(median_grid>0).nonzero()
     (u, v) = uv_bins
@@ -99,12 +99,59 @@ def plot_uv_grid(median_grid, uvbins, annulus_width, metric_name='median', bin_m
     p.add_tools(h)
 
 
+    if filename:
+        export_png(p, filename=filename)
+    else:
+        show(p)
+
     show(p)
     return p, bin_max
 
 
 
-def plot_rms_vs_dist(value_grids, names, uvbins, grid_row_map, n_annulus=20, title="RMS"):
+def plot_rms_vs_dist(value_grids, uvbins, names, nbins=500, title="RMS", savefig=False):
+    
+    TOOLS="hover,crosshair,pan,zoom_in,zoom_out,box_zoom,reset,tap,save"
+
+    p = figure(title=f"UV Distance vs. {title}", tools=TOOLS, plot_width=1200, plot_height=400, x_axis_label="UV Distance", y_axis_label=f"{title} (Jy)")  
+    
+    for i, value_grid in enumerate(value_grids):
+
+        uv_bins = np.asarray(value_grid>0).nonzero()
+        uv_bins_ = np.array([uv_bins[0], uv_bins[1]])
+
+        bin_uv_dist = np.sqrt(uvbins[0][uv_bins_[0]-1]**2 + uvbins[1][uv_bins_[1]-1]**2)
+        
+        bin_values = value_grid[uv_bins]
+
+        hist, edges = np.histogram(bin_uv_dist, nbins)
+
+        median_dist = []
+        variance_dist = []
+        for ind, edge in enumerate(edges[:-1]):
+            minuv = edges[ind]
+            maxuv = edges[ind+1]
+
+            ann_bin = bin_values[np.where((bin_uv_dist>minuv) & (bin_uv_dist<maxuv))]
+            ann_med = np.median(ann_bin)
+            ann_var = np.std(ann_bin)
+
+            median_dist.append(ann_med)
+            variance_dist.append(ann_var)
+
+        median_dist = np.array(median_dist)
+
+        uv_position = (edges[1:]+edges[:-1])/2
+
+        # p.scatter(x=uvdist, y=binval, fill_color='blue', fill_alpha=0.2, line_color=None)
+        p.line(x=uv_position, y=median_dist, line_color=colors[i], legend_label=names[i])
+        
+    if savefig:
+        export_png(p, filename='rms_vs_uv-dist.png')
+    show(p)
+
+def plot_rms_vs_ann_dist(value_grids, names, uvbins, grid_row_map, n_annulus=20, title="RMS"):
+
 
     uv_bins = np.asarray(value_grids[0]>0).nonzero()
     uv_bins_ = np.array([uv_bins[0], uv_bins[1]])

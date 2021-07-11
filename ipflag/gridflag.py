@@ -18,13 +18,53 @@ import numba as nb
 
 from . import groupby_apply, groupby_partition, annulus_stats
 
+
+def process_stokes_options(ds_ind, stokes, use_existing_flags):
+    """
+    Determine columns to use for flagging algorithm from DATA and FLAG tables.
+    """
+
+    # Determine which polarization state to grid and flag
+    if stokes=='I':
+        vals = (da.absolute(ds_ind.DATA[:,0].data + ds_ind.DATA[:,-1].data))
+    elif stokes=='Q':
+        vals = (da.absolute(ds_ind.DATA[:,0].data - ds_ind.DATA[:,-1].data))
+    elif stokes=='U':
+        vals = (da.real(ds_ind.DATA[:,1].data + ds_ind.DATA[:,2].data))
+    elif stokes=='V':
+        vals = (da.imag(ds_ind.DATA[:,1].data - ds_ind.DATA[:,2].data))
+    elif stokes=='A':
+        vals = da.absolute(ds_ind.DATA.data)
+    else:
+        raise ValueError(f"compute_ipflag_grid: the stokes argument, '{stokes}', \
+            is not currently implemented, please select another value.")
+
+    if use_existing_flags:
+        if stokes=='I':
+            flags = ds_ind.FLAG.data[:,0] | ds_ind.FLAG.data[:,-1]
+        elif stokes=='Q':
+            flags = ds_ind.FLAG.data[:,0] | ds_ind.FLAG.data[:,-1]
+        elif stokes=='U':
+            flags = ds_ind.FLAG.data[:,1] | ds_ind.FLAG.data[:,2]
+        elif stokes=='V':
+            flags = ds_ind.FLAG.data[:,1] | ds_ind.FLAG.data[:,2]
+        elif stokes=='A':
+            # Logical OR of all pol state columns
+            flags = da.sum(ds_ind.FLAG.data, axis=1, dtype=np.bool)
+    else:
+        flags = None
+
+    return vals, flags
+
+
+
 def compute_ipflag_grid(
     ds_ind, 
-    data_columns, 
     uvbins, 
     sigma=3.0, 
     partition_level=4, 
-    stokes='I', 
+    stokes='I',
+    use_existing_flags=True,
     client=None
 ):
     """    
@@ -36,9 +76,6 @@ def compute_ipflag_grid(
     ds_ind : xarray.dataset
         An xarray datset imported from a measurement set. It must contain 
         coordinates U_bins and V_bins, and relevant data and position variables.
-    data_columns : list
-        Components for Stokes terms to be used to compute amplitude. Depends on 
-        dataset.
     uvbins : list
         List of two arrays, each containing the bounds for the discrete U and V 
         bins in the ds_ind dataset.
@@ -48,46 +85,35 @@ def compute_ipflag_grid(
     partition_level : int
         Internal parameter used to split the dataset in to congruent chunks in 
         the uv-bin space. Used for concurrency.
+    stokes : string
+        Reduce the data via one or more combinations of columns - 'I', 'Q', 'U',
+        'V' for corresponding stokes parameters. For amplitude of each columns 
+        use 'A'. 
+    use_existing_flags : bool
+        Either remove rows that are flagged in the input MS file before flagging
+        (True) or ignore and overwrite existing flags (False).
+    client : dask.distributed.client
+        Pass dask distributed client or 'None' for local computation.
 
     Returns
     -------
     flag_list: numpy.array
         A list of flag indicies to be applied to the original measurement set.
-    median_grid : numpy.array
+    median_grid_unflagged : numpy.array
         A two-dimensional array representing a uv-grid. Each cell in the grid is 
-        the median of all values, after zero removal and flagging, in that bin.     
+        the median of all values, after zero removal and flagging, in that bin.
+    median_grid : numpy.array
+        The same as the above but after flagged visibilities are removed.
     """
 
     # Load data from dask-ms dastaset
     ubins = ds_ind.U_bins.data
     vbins = ds_ind.V_bins.data
 
-    # Determine which polarization state to grid and flag
-    if stokes=='I':
-        vals = (da.absolute(ds_ind.DATA[:,0].data + ds_ind.DATA[:,-1].data))
-        flags = ds_ind.FLAG.data[:,0] | ds_ind.FLAG.data[:,-1]
-    elif stokes=='Q':
-        vals = (da.absolute(ds_ind.DATA[:,0].data - ds_ind.DATA[:,-1].data))
-        flags = ds_ind.FLAG.data[:,0] | ds_ind.FLAG.data[:,-1]
-    elif stokes=='U':
-        vals = (da.real(ds_ind.DATA[:,1].data + ds_ind.DATA[:,2].data))
-        flags = ds_ind.FLAG.data[:,1] | ds_ind.FLAG.data[:,2]
-    elif stokes=='V':
-        vals = (da.imag(ds_ind.DATA[:,1].data - ds_ind.DATA[:,2].data))
-        flags = ds_ind.FLAG.data[:,1] | ds_ind.FLAG.data[:,2]
-    elif stokes=='A':
-        vals = da.absolute(ds_ind.DATA.data)
-        da.sum(f, axis=1, dtype=np.bool)
-        # Logical OR of all pol state columns
-        flags = da.sum(ds_ind.FLAG.data, axis=1, dtype=np.bool)
-    else:
-        raise ValueError(f"compute_ipflag_grid: the stokes argument, '{stokes}', \
-            is not currently implemented, please select another value.")
-
+    vals, flags = process_stokes_options(ds_ind, stokes, True)
 
     # The array 'p' is used to map flags back to the original file order
     p = da.arange(len(ds_ind.newrow), dtype=np.int64, chunks=ubins.chunks)
-
 
     chunks = list(ubins.chunks[0])
 
@@ -110,22 +136,44 @@ def compute_ipflag_grid(
     dd_flags = flags_part.to_delayed()
 
     vdim = vbins_part.ndim
-    
-    if vdim > 1:
-        group_bins_sort = [dask.delayed(groupby_partition.sort_bins_multi)(
-            part[0][0], 
-            part[1][0], 
-            part[2]) for part in zip(dd_bins, dd_vals, dd_flags)]
+
+    if use_existing_flags:
+        if vdim > 1:
+            group_bins_sort = [dask.delayed(groupby_partition.sort_bins_multi)
+            (
+                part[0][0], 
+                part[1][0], 
+                part[2]
+            ) for part in zip(dd_bins, dd_vals, dd_flags)]
+        else:
+            group_bins_sort = [dask.delayed(groupby_partition.sort_bins)
+            (
+                part[0][0], 
+                part[1], 
+                part[2]
+            ) for part in zip(dd_bins, dd_vals, dd_flags)]
+
     else:
-        group_bins_sort = [dask.delayed(groupby_partition.sort_bins)(
-            part[0][0], 
-            part[1], 
-            part[2]) for part in zip(dd_bins, dd_vals, dd_flags)]
+        if vdim > 1:
+            group_bins_sort = [dask.delayed(groupby_partition.sort_bins_multi)
+            (
+                part[0][0], 
+                part[1][0]
+            ) for part in zip(dd_bins, dd_vals)]
+        else:
+            group_bins_sort = [dask.delayed(groupby_partition.sort_bins)
+            (
+                part[0][0], 
+                part[1]
+            ) for part in zip(dd_bins, dd_vals)]
 
 
-    group_chunks = [dask.delayed(groupby_partition.create_bin_groups_sort)(c[0], c[1], c[2]) for c in group_bins_sort]
-    function_chunks = [dask.delayed(groupby_partition.apply_grid_median)(c[1], c[2]) for c in group_chunks]
-    median_grid = dask.delayed(groupby_partition.combine_function_partitions)(function_chunks)
+    group_chunks = [dask.delayed(groupby_partition.create_bin_groups_sort)
+                            (c[0], c[1], c[2]) for c in group_bins_sort]
+    function_chunks = [dask.delayed(groupby_partition.apply_grid_median)
+                            (c[1], c[2]) for c in group_chunks]
+    median_grid = dask.delayed(groupby_partition.combine_function_partitions)(
+                                function_chunks)
 
     if client:
         median_grid_unflagged = client.compute(median_grid)
@@ -178,10 +226,12 @@ def compute_ipflag_grid(
     print("Compute median grid on the partitions.")
 
     if client:
-        ms_flag_list, da_flag_list, median_grid_flagged, count_grid = client.compute(results).result()
+        ms_flag_list, da_flag_list, median_grid_flagged, count_grid = \
+            client.compute(results).result()
         median_grid_unflagged = median_grid_unflagged.result()
     else:
-        ms_flag_list, da_flag_list, median_grid_flagged, count_grid = results.compute()
+        ms_flag_list, da_flag_list, median_grid_flagged, count_grid = \
+            results.compute()
 
 
     return ms_flag_list, median_grid_unflagged, median_grid_flagged
@@ -412,7 +462,6 @@ def dask_partition_sort(a, b, v, f, p, chunks, binary_chunks, partition_level, c
 
 def compute_median_grid(
     ds_ind, 
-    data_columns, 
     uvbins, 
     partition_level=4, 
     stokes='I', 
@@ -423,26 +472,7 @@ def compute_median_grid(
     ubins = ds_ind.U_bins.data
     vbins = ds_ind.V_bins.data
 
-    if stokes=='I':
-        vals = (da.absolute(ds_ind.DATA[:,0].data + ds_ind.DATA[:,-1].data))
-        flags = ds_ind.FLAG.data[:,0] | ds_ind.FLAG.data[:,-1]
-    elif stokes=='Q':
-        vals = (da.absolute(ds_ind.DATA[:,0].data - ds_ind.DATA[:,-1].data))
-        flags = ds_ind.FLAG.data[:,0] | ds_ind.FLAG.data[:,-1]
-    elif stokes=='U':
-        vals = (da.real(ds_ind.DATA[:,1].data + ds_ind.DATA[:,2].data))
-        flags = ds_ind.FLAG.data[:,1] | ds_ind.FLAG.data[:,2]
-    elif stokes=='V':
-        vals = (da.imag(ds_ind.DATA[:,1].data - ds_ind.DATA[:,2].data))
-        flags = ds_ind.FLAG.data[:,1] | ds_ind.FLAG.data[:,2]
-    elif stokes=='A':
-        vals = da.absolute(ds_ind.DATA.data)
-        da.sum(f, axis=1, dtype=np.bool)
-        # Logical OR of all pol state columns
-        flags = da.sum(ds_ind.FLAG.data, axis=1, dtype=np.bool)
-    else:
-        raise ValueError(f"compute_ipflag_grid: the stokes argument, '{stokes}',\
-                    is not currently implemented, please select another value.")
+    vals, flags = process_stokes_options(ds_ind, stokes, True)
 
     #Comute chunks
     chunks = list(ubins.chunks[0])
@@ -632,3 +662,56 @@ def map_amplitude_grid(
 #         median_grid = median_grid_.compute()
 #         std_grid = std_grid_.compute()
         return median_grid, std_grid 
+
+
+def bin_rms_grid(ds_ind, flag_list):
+    """ Create a two dimensional UV-grid with the RMS value for each bin, after
+    removing flags in a provided list of flags. 
+    
+    Parameters 
+    ----------
+    ds_ind : xarray.dataset
+        Dataset for input MS file.
+    flag_list : array of ints 
+        Indicies for flagged rows in the dataset.
+        
+    Returns
+    -------
+    rms_grid : array of shape (ubins, vbins)
+        A two-dimensional array wiht the RMS value for the values in each  UV bin.
+        
+    """
+    
+    
+    flags = np.zeros((len(ds_ind.newrow)), dtype=bool)
+    flags[flag_list] = True
+    
+    # Use Calculated Flags Column
+    ubins = ds_ind.U_bins.data
+    vbins = ds_ind.V_bins.data
+    vals = (da.absolute(ds_ind.DATA[:,0].data + ds_ind.DATA[:,-1].data))
+    
+    print("Processing RMS Grid with ", np.sum(1*flags), len(flag_list), "flags.")
+    
+    p = da.arange(len(ds_ind.newrow), dtype=np.int64, chunks=ubins.chunks)
+    
+    dd_bins = da.stack([ubins, vbins, p]).T
+    
+    dd_bins = dd_bins.rechunk((ubins.chunks[0], 3))
+    
+    bins = dd_bins.compute()
+    vals = vals.compute()
+    
+    bins_sort, vals_sort, null_flags = groupby_partition.sort_bins(bins, vals, flags)
+    
+    print(len(vals_sort))
+    
+    uv_ind, values, grid_row_map, null_flags = groupby_partition.create_bin_groups_sort(bins_sort, 
+                                                                                        vals_sort, 
+                                                                                        null_flags)
+    
+    print(len(values))
+    
+    rms_grid = groupby_partition.apply_grid_function(values, grid_row_map, bin_rms)
+    
+    return rms_grid
