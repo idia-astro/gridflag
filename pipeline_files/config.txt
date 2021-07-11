@@ -1,0 +1,52 @@
+[data]
+vis = '/scratch3/users/jbochenek/data/1491550051.ms/'
+
+[fields]
+bpassfield = ''
+fluxfield = ''
+phasecalfield = ''
+targetfields = ''
+extrafields = ''
+
+[slurm]
+nodes = 1
+ntasks_per_node = 8
+plane = 1
+mem = 232
+partition = 'Main'
+exclude = ''
+time = '12:00:00'
+submit = False
+container = '/idia/software/containers/casa-stable-5.7.0.simg'
+mpi_wrapper = '/idia/software/pipelines/casa-pipeline-release-5.6.1-8.el7/bin/mpicasa'
+name = ''
+dependencies = ''
+account = 'b03-idia-ag'
+reservation = ''
+verbose = False
+precal_scripts = [('calc_refant.py', False, ''), ('partition.py', True, '')]
+postcal_scripts = [('concat.py', False, '')]
+scripts = [('validate_input.py', False, ''), ('gridflag_round.py', True, '/users/jbochenek/containers/astro_tools.simg')]
+
+[crosscal]
+minbaselines = 4                  # Minimum number of baselines to use while calibrating
+chanbin = 1                       # Number of channels to average before calibration (during partition)
+width = 1                         # Number of channels to (further) average after calibration (during split)
+timeavg = '8s'                    # Time interval to average after calibration (during split)
+createmms = True                  # Create MMS (True) or MS (False) for cross-calibration during partition
+keepmms = True                    # Output MMS (True) or MS (False) during split
+spw = '0:880~930MHz,0:930~980MHz,0:980~1030MHz,0:1030~1080MHz,0:1080~1130MHz,0:1130~1180MHz,0:1280~1330MHz,0:1330~1380MHz,0:1380~1430MHz,0:1430~1480MHz,0:1480~1530MHz,0:1630~1680MHz'
+nspw = 12
+calcrefant = False                # Calculate reference antenna in program (overwrites 'refant')
+refant = 'm059'                   # Reference antenna name / number
+standard = 'Stevens-Reynolds 2016'# Flux density standard for setjy
+badants = []                      # List of bad antenna numbers (to flag)
+badfreqranges = [ '933~960MHz',   # List of bad frequency ranges (to flag)
+	'1163~1299MHz',
+	'1524~1630MHz']
+
+[run]
+continue = True
+dopol = False
+timestamp = '2021-07-11-21-24-45'
+
