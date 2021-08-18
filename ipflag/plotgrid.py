@@ -8,13 +8,15 @@ import numpy as np
 
 from bokeh.plotting import figure, show, save
 from bokeh.models import ColumnDataSource, Label, Ellipse, HoverTool, Range1d, PrintfTickFormatter
-from bokeh.palettes import Spectral6, Spectral4
+from bokeh.palettes import Spectral6, Spectral4, Category10
 from bokeh.transform import linear_cmap
 from bokeh.layouts import gridplot 
 from bokeh.io import export_png
 
 
 from bokeh.util.hex import hexbin
+
+import bokeh.palettes as bp
 
 from scipy.stats import median_absolute_deviation, gamma, chi2, poisson, expon, lognorm, rice, rayleigh, norm, binom
 
@@ -104,8 +106,60 @@ def plot_uv_grid(median_grid, uvbins, annulus_width, metric_name='median', filen
     else:
         show(p)
 
-    show(p)
     return p, bin_max
+
+
+def bin_rms_grid(ds_ind, flag_list):
+    """ Create a two dimensional UV-grid with the RMS value for each bin, after
+    removing flags in a provided list of flags. 
+    
+    Parameters 
+    ----------
+    ds_ind : xarray.dataset
+        Dataset for input MS file.
+    flag_list : array of ints 
+        Indicies for flagged rows in the dataset.
+        
+    Returns
+    -------
+    rms_grid : array of shape (ubins, vbins)
+        A two-dimensional array wiht the RMS value for the values in each  UV bin.
+        
+    """
+    
+    
+    flags = np.zeros((len(ds_ind.newrow)), dtype=bool)
+    flags[flag_list] = True
+    
+    # Use Calculated Flags Column
+    ubins = ds_ind.U_bins.data
+    vbins = ds_ind.V_bins.data
+    vals = (da.absolute(ds_ind.DATA[:,0].data + ds_ind.DATA[:,-1].data))
+    
+    print("Processing RMS Grid with ", np.sum(1*flags), len(flag_list), "flags.")
+    
+    p = da.arange(len(ds_ind.newrow), dtype=np.int64, chunks=ubins.chunks)
+    
+    dd_bins = da.stack([ubins, vbins, p]).T
+    
+    dd_bins = dd_bins.rechunk((ubins.chunks[0], 3))
+    
+    bins = dd_bins.compute()
+    vals = vals.compute()
+    
+    bins_sort, vals_sort, null_flags = groupby_partition.sort_bins(bins, vals, flags)
+    
+    print(len(vals_sort))
+    
+    uv_ind, values, grid_row_map, null_flags = groupby_partition.create_bin_groups_sort(bins_sort, 
+                                                                                        vals_sort, 
+                                                                                        null_flags)
+    
+    print(len(values))
+    
+    rms_grid = groupby_partition.apply_grid_function(values, grid_row_map, bin_rms)
+    
+    return rms_grid
 
 
 
@@ -115,6 +169,8 @@ def plot_rms_vs_dist(value_grids, uvbins, names, nbins=500, title="RMS", savefig
 
     p = figure(title=f"UV Distance vs. {title}", tools=TOOLS, plot_width=1200, plot_height=400, x_axis_label="UV Distance", y_axis_label=f"{title} (Jy)")  
     
+    colors = Category10[6]
+
     for i, value_grid in enumerate(value_grids):
 
         uv_bins = np.asarray(value_grid>0).nonzero()
@@ -144,7 +200,7 @@ def plot_rms_vs_dist(value_grids, uvbins, names, nbins=500, title="RMS", savefig
         uv_position = (edges[1:]+edges[:-1])/2
 
         # p.scatter(x=uvdist, y=binval, fill_color='blue', fill_alpha=0.2, line_color=None)
-        p.line(x=uv_position, y=median_dist, line_color=colors[i], legend_label=names[i])
+        p.line(x=uv_position, y=median_dist, line_color=colors[i], legend_label=names[i], line_width=2)
         
     if savefig:
         export_png(p, filename='rms_vs_uv-dist.png')
@@ -403,7 +459,7 @@ def make_hist_plot(binname, bin_values, nbins, yrange=None, weights=None, tools=
 #     params = norm.fit(bin_values)
 #     y = scale*norm.pdf(binscenters, *params)
 
-    p = figure(title=f'{binname}', tools=tools, plot_width=600, plot_height=400)
+    p = figure(title=f'{binname}', tools=tools, plot_width=600, plot_height=450)
     p.quad(bottom=0, top=n, left=bins[:-1], right=bins[1:], fill_color=fill_color, alpha=0.7)
 
     p.line(binscenters, y, line_color='green', line_dash='5', line_width=2)
@@ -416,8 +472,8 @@ def make_hist_plot(binname, bin_values, nbins, yrange=None, weights=None, tools=
 
     p.x_range=Range1d(bins[0], bins[-1])
 
-    count_text = Label(x=65, y=135, x_units='screen', y_units='screen', text_font_size = "10px", text=f"count: {bin_count}")
-    mean_text = Label(x=65, y=125, x_units='screen', y_units='screen', text_font_size = "10px", text=f"mean: {bin_mean:.3f}±{bin_mean_var:.3f}")
+    count_text = Label(x=65, y=130, x_units='screen', y_units='screen', text_font_size = "10px", text=f"count: {bin_count}")
+    mean_text = Label(x=65, y=120, x_units='screen', y_units='screen', text_font_size = "10px", text=f"mean: {bin_mean:.3f}±{bin_mean_var:.3f}")
 #     mean_text = Label(x=400, y=125, x_units='screen', y_units='screen', text_font_size = "10px", text=f"std: {bin_std:.3f}")
 
     p.ray(x=[bin_med], y=[0], length=0, angle=[np.pi/2.], color='red', line_dash='dashed', line_alpha=0.75)
@@ -427,7 +483,7 @@ def make_hist_plot(binname, bin_values, nbins, yrange=None, weights=None, tools=
     else:
         text_color='black'
 
-    med_text = Label(x=65, y=115, x_units='screen', y_units='screen', text_font_size = "10px", text_color=text_color, text=f"med:   {bin_med:.3f}±{bin_med_var:.3f}")
+    med_text = Label(x=65, y=110, x_units='screen', y_units='screen', text_font_size = "10px", text_color=text_color, text=f"med:   {bin_med:.3f}±{bin_med_var:.3f}")
 
     if bin_ratio > 1.5:
         text_color='red'
@@ -436,7 +492,7 @@ def make_hist_plot(binname, bin_values, nbins, yrange=None, weights=None, tools=
 
     text_color='black'
 
-    ratio_text = Label(x=65, y=105, x_units='screen', y_units='screen', text_font_size = "10px", text_color=text_color, text=f"ratio: {bin_ratio:.3f}")
+    ratio_text = Label(x=65, y=100, x_units='screen', y_units='screen', text_font_size = "10px", text_color=text_color, text=f"ratio: {bin_ratio:.3f}")
 
     p.add_layout(count_text)
     p.add_layout(mean_text)
@@ -458,7 +514,7 @@ def plot_bin_grid(value_groups, uvbins, nbins=50, ncols=4):
         bin_name = f"{sb} - {bin_count}"
         plots.append( make_hist_plot(bin_name, value_groups[sb[0]][sb[1]], nbins) )
 
-    show(gridplot(plots, ncols=ncols, plot_width=200, plot_height=200, toolbar_location=None))
+    show(gridplot(plots, ncols=ncols, plot_width=200, plot_height=220, toolbar_location=None))
 
 
 def plot_bin_grid_2(bin_groups, bin_names, nbins=25, ncols=5, hrange=None, fit_function=norm):

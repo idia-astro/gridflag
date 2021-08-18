@@ -664,6 +664,12 @@ def map_amplitude_grid(
         return median_grid, std_grid 
 
 
+def bin_rms(a):
+    mu = np.median(a)
+    rms = np.sqrt(np.sum((a-mu)**2))
+    return rms
+
+
 def bin_rms_grid(ds_ind, flag_list):
     """ Create a two dimensional UV-grid with the RMS value for each bin, after
     removing flags in a provided list of flags. 

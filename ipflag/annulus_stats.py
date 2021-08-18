@@ -444,30 +444,38 @@ def compute_bin_threshold(bin_val, ci_lower, ci_upper, sigma):
         return -1., -1.
 
 #     if not(alpha):
+    # Remove
     alpha = 1./(2*len(bin_val))
 
     bin_median = np.median(bin_val)
 
     bin_ratio = np.mean(bin_val)/bin_median
 
+    # Test for high median distributions
     if (bin_median > ci_upper) or (bin_ratio > 1.2):
 
-#         lthreshold, uthreshold = get_rayleigh_thresholds(ci_upper, alpha)
-#         bin_val = bin_val[np.where( bin_val<uthreshold) ]
-# 
-#         if len(bin_val)==0:
-#             return 0., 0.
-#         bin_ratio = np.mean(bin_val)/np.median(bin_val)
-
-        bin_val, low, high = sigmaclip(bin_val, sigma, sigma, -100, False)
-        uthreshold = np.min(np.array([high, ci_upper]))
+        # Since we can't trust this bin, use the high median threshold and cut with 
+        # the alpha value for the bin size.
+        lthreshold, uthreshold = get_rayleigh_thresholds(ci_upper, alpha)
+        bin_val = bin_val[np.where( bin_val<uthreshold) ]
 
         if len(bin_val)==0:
             return 0., 0.
-        if np.median(bin_val) > ci_upper:
-            return 0., 0.
+
+        bin_ratio = np.mean(bin_val)/np.median(bin_val)
+        # # Apply sigma clipping as an optional step, should not be needed
+        if (bin_ratio > 1.4):
+            bin_val, low, high = sigmaclip(bin_val, sigma, sigma, -100, False)
+            if len(bin_val)==0:
+                return 0., 0.
 
         bin_median = np.median(bin_val)
+        bin_ratio = np.mean(bin_val)/bin_median
+
+        # Cut the entire bin if the distribution is still bad
+        if (bin_median>ci_upper) or (bin_ratio > 1.4):
+            return 0., 0.
+
         lthreshold, uthreshold = get_rayleigh_thresholds(bin_median, alpha)
     else:
         lthreshold, uthreshold = get_rayleigh_thresholds(bin_median, alpha) 
