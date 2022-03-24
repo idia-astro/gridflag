@@ -11,13 +11,13 @@ All numerically intensive code, which consist of the UV-partition and certain st
 The software is and dependencies can be installed using the github repository:
 
 ```bash
-	$ pip3 install --upgrade git+https://github.com/idia-astro/ipflag.git
+$ pip3 install --upgrade git+https://github.com/idia-astro/ipflag.git
 ```
 
 For those using the Ilifu cluster, IPFlag is installed in a singularity container for use as a pipeline step or for stand-alone processing. It has also been integrated with the IDIA MeerKAT pipeline. A fork of the pipeline compatible with GridFlag is available at `/users/jbochenek/work/pipeline_gridflag/pipelines_casa6`, and can be used directly on Ilifu by running the pipeline setup script: 
 
 ```
-source /users/jbochenek/work/pipeline_gridflag/pipelines_casa6/pipelines/setup.sh
+$ source /users/jbochenek/work/pipeline_gridflag/pipelines_casa6/pipelines/setup.sh
 ```
 
 After setting up the pipeline for your data file, add a gridflag step to the pipeline by editing the automatically generated config script and adding the following to the `scripts` list:
@@ -26,7 +26,7 @@ After setting up the pipeline for your data file, add a gridflag step to the pip
 ('gridflag_round.py', False, '/users/jbochenek/containers/astro_tools.simg')
 ```
 
-This will run the flagger as a step in the pipeline, using dask rather than MPI for parallelization.
+Then run the pipeline as usual. This will run the flagger as a step in the pipelinem using dask rather than MPI for parallelization.
 
 
 # Usage
@@ -36,8 +36,7 @@ The RFI mitigation algorithm takes a single parameter to control the threshold f
 
 To test and calibrate the flagging performance, GridFlag can be run in a Jupyter notebook, making it easier to investigate and visualize the results. An demonstration notebook is available in this repository, https://github.com/idia-astro/ipflag/blob/master/ipflag_workflow.ipynb.
 
-After running the flagging algorithm on a set of code, a set of visualizations are automatically generated, showing the UV-grid before and after flagging, and the RMS vs radial distance. 
-
+After running the flagging algorithm on a set of code, a set of visualizations are automatically generated, showing the UV-grid before and after flagging, and the RMS vs radial distance.
 
 
 
