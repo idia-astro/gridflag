@@ -159,8 +159,8 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
         bincount = [int((uvlimit[0][1] - uvlimit[0][0])/binwidth[0]),
                     int((uvlimit[1][1] - uvlimit[1][0])/binwidth[1])]
                     
-    uvbins = [np.linspace( uvlimit[0][0], uvlimit[0][1], bincount[0] ),
-              np.linspace( uvlimit[1][0], uvlimit[1][1], bincount[1] )]
+    uvbins = np.array([np.linspace( uvlimit[0][0], uvlimit[0][1], bincount[0] ),
+              np.linspace( uvlimit[1][0], uvlimit[1][1], bincount[1] )], dtype=np.float64)
 
 
     # Reload the Main table grouped by DATA_DESC_ID
