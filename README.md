@@ -23,7 +23,7 @@ $ source /users/jbochenek/work/pipeline_gridflag/pipelines_casa6/pipelines/setup
 After setting up the pipeline for your data file, add a gridflag step to the pipeline by editing the automatically generated config script and adding the following to the `scripts` list:
 
 ```
-('gridflag_round.py', False, '/users/jbochenek/containers/astro_tools.simg')
+('gridflag_round.py', False, '/idia/software/containers/gridflag_tools.simg')
 ```
 
 Then run the pipeline as usual. This will run the flagger as a step in the pipelinem using dask rather than MPI for parallelization.
@@ -34,13 +34,13 @@ The GridFlag algorithm can be used both interactively, for example in Jupyter, a
 
 The RFI mitigation algorithm takes a single parameter to control the threshold for discriminating visibilities. This parameter is the significance or α, which corresponds to the p-value for rejecting non-RFI measurements, according to the GridFlag model. A value of α = 3 means a row will be flagged if it is at or above the threshold in its UV cell for which 95% of non-RFI measurements are distributed. This value is computed according to the sample size in the cell.  
 
-To test and calibrate the flagging performance, GridFlag can be run in a Jupyter notebook, making it easier to investigate and visualize the results. An demonstration notebook is available in this repository, https://github.com/idia-astro/ipflag/blob/master/ipflag_workflow.ipynb.
+To test and calibrate the flagging performance, GridFlag can be run in a Jupyter notebook, making it easier to investigate and visualize the results. An demonstration notebook is available in this repository, `https://github.com/idia-astro/ipflag/blob/master/ipflag_workflow.ipynb`.
 
 After running the flagging algorithm on a set of code, a set of visualizations are automatically generated, showing the UV-grid before and after flagging, and the RMS vs radial distance.
 
 
 
-# Referneces 
+# References 
 
 1. : Two Procedures to Flag Radio Frequency Intereference in the UV Plane 
 [https://arxiv.org/abs/1711.00128](https://arxiv.org/abs/1711.00128)

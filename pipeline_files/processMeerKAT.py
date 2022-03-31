@@ -67,7 +67,7 @@ PRECAL_SCRIPTS = [('calc_refant.py',False,''),('partition.py',True,'')] #Scripts
 POSTCAL_SCRIPTS = [('concat.py',False,''),('plotcal_spw.py', False, ''),('selfcal_part1.py',True,''),('selfcal_part2.py',False,''),('science_image.py', True, '')] #Scripts run after calibration at top level directory when nspw > 1
 SCRIPTS = [ ('validate_input.py',False,''),
             # ('flag_round_1.py',True,''),
-            ('gridflag_round.py',False,'/users/jbochenek/containers/astro_tools.simg'),
+            ('gridflag_round.py',False,'/idia/software/containers/gridflag_tools.simg'),
             ('calc_refant.py',False,''),
             ('setjy.py',True,''),
             ('xx_yy_solve.py',False,''),
