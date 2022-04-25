@@ -67,7 +67,7 @@ def run_gridflag(visname, fields):
         death_timeout="1m",
         log_directory="logs/",
         project="b03-idia-ag",
-        python="singularity exec /users/jbochenek/containers/astro_tools.simg /usr/bin/python3"
+        python="singularity exec /idia/software/containers/gridflag_tools.simg /usr/bin/python3"
     )
 
     cluster.scale(jobs=n_workers)
