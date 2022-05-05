@@ -41,7 +41,7 @@ def compute_angular_resolution(uvw_chan):
 
 def list_fields(msmd):
     """Print a list fields in measurement set.
-    
+
     Parameters
     ----------
     msmd : listobs-object
@@ -164,8 +164,8 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
     chunksize : int
         Size of chunks to be used with Dask.
     bin_count_factor : float
-        A factor to control binning if the automatic binning doesn't work 
-        right. A factor of 0.5 results in half the bins in u and v. 
+        A factor to control binning if the automatic binning doesn't work
+        right. A factor of 0.5 results in half the bins in u and v.
         default: 1.
 
     Returns
@@ -262,7 +262,7 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
 
         diameter = np.average([a['diameter'] for a in antennas])
         max_lambda = np.max(chan_wavelength_lim)
-          
+
         fov = 1.22 * max_lambda/diameter
 
         binwidth = 1./fov
@@ -271,7 +271,7 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
 
         bincount = [int(bin_count_factor*(uvlimit[0][1] - uvlimit[0][0])/binwidth[0]),
                     int(bin_count_factor*(uvlimit[1][1] - uvlimit[1][0])/binwidth[1])]
-                
+
 
     uvbins = [np.linspace( uvlimit[0][0], uvlimit[0][1], bincount[0] ),
               np.linspace( uvlimit[1][0], uvlimit[1][1], bincount[1] )]
@@ -285,14 +285,14 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
     ndd = len(dd.ROWID)
     nrows = 0
 
-    # Use the DATA_DESCRIPTION table to process each subset of data (different ddids can have 
+    # Use the DATA_DESCRIPTION table to process each subset of data (different ddids can have
     # a different number of channels). The subsets will be stacked after the channel scaling.
     ds_bindex = []
 
     print(f"Creating a UV-grid with ({bincount[0]}, {bincount[1]}) bins with bin size {binwidth[0]:.1f} by {binwidth[1]:.1f} lambda.")
 
     print(f"\nField, Data ID, SPW ID, Channels")
-    
+
     for ds_ in ds_ms:
             fid = ds_.attrs['FIELD_ID']
             ddid = ds_.attrs['DATA_DESC_ID']
@@ -318,15 +318,15 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
             vval_dig = xr.apply_ufunc(da.digitize, uvw_chan[:,:,1], uvbins[1], dask='allowed', output_dtypes=[np.int32])
 
 #             ds_ind = xr.Dataset(data_vars = {'DATA': ds_[datacolumn], 'FLAG': ds_['FLAG'], 'UV': uvw_chan[:,:,:2]}, coords = {'U_bins': uval_dig.astype(np.int32), 'V_bins': vval_dig.astype(np.int32)})
-# 
+#
 #             return ds_ind
-# 
+#
 #             ds_ind = ds_ind.stack(newrow=['row', 'chan']).transpose('newrow', 'uvw', 'corr')
 #             ds_ind = ds_ind.drop('ROWID')
 #             ds_ind = ds_ind.chunk({'corr': 4, 'uvw': 2, 'newrow': chunksize})
 #             ds_ind = ds_ind.unify_chunks()
 
-            # Avoid calling xray.dataset.stack, as it leads to an intense multi-index shuffle 
+            # Avoid calling xray.dataset.stack, as it leads to an intense multi-index shuffle
             # that does not seem to be dask-backed and runs on the scheduler.
 
             da_data = ds_[datacolumn].data.reshape(-1, ncorr)
@@ -337,14 +337,14 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
             ds_ind = ds_ind.unify_chunks()
 
             nrows+=len(ds_ind.newrow)
-            
+
             ds_bindex.append(ds_ind)
 
     print(f"\nProcessed {ndd} unique data description IDs comprising {nrows} rows.")
 
     ds_ind = xr.concat(ds_bindex, dim="newrow")
     ds_ind.attrs = {'Measurement Set': msfile, 'Field': fieldid}
-    
+
     return ds_ind, uvbins
 
 
@@ -372,8 +372,8 @@ def load_ms_file_splitspw(msfile, fieldid=None, datacolumn='DATA', method='physi
     chunksize : int
         Size of chunks to be used with Dask.
     bin_count_factor : float
-        A factor to control binning if the automatic binning doesn't work 
-        right. A factor of 0.5 results in half the bins in u and v. 
+        A factor to control binning if the automatic binning doesn't work
+        right. A factor of 0.5 results in half the bins in u and v.
         default: 1.
 
     Returns
@@ -470,7 +470,7 @@ def load_ms_file_splitspw(msfile, fieldid=None, datacolumn='DATA', method='physi
 
         diameter = np.average([a['diameter'] for a in antennas])
         max_lambda = np.max(chan_wavelength_lim)
-          
+
         fov = 1.22 * max_lambda/diameter
 
         binwidth = 1./fov
@@ -479,7 +479,7 @@ def load_ms_file_splitspw(msfile, fieldid=None, datacolumn='DATA', method='physi
 
         bincount = [int(bin_count_factor*(uvlimit[0][1] - uvlimit[0][0])/binwidth[0]),
                     int(bin_count_factor*(uvlimit[1][1] - uvlimit[1][0])/binwidth[1])]
-                
+
 
     uvbins = [np.linspace( uvlimit[0][0], uvlimit[0][1], bincount[0] ),
               np.linspace( uvlimit[1][0], uvlimit[1][1], bincount[1] )]
@@ -511,7 +511,7 @@ def load_ms_file_splitspw(msfile, fieldid=None, datacolumn='DATA', method='physi
 
             ddid_list = np.array(np.where(dd_inv==dind)[0])
             ms = xds_from_ms(msfile, columns=[datacolumn, 'UVW', 'FLAG', 'DATA_DESC_ID'], group_cols=['FIELD_ID'], taql_where="DATA_DESC_ID IN ({})".format(",".join(np.array(ddid_list, dtype='str'))) )
-            
+
             ds_ = ms[0]
 
             uvw_chan_list = []
@@ -528,9 +528,9 @@ def load_ms_file_splitspw(msfile, fieldid=None, datacolumn='DATA', method='physi
 
                 chan_wavelength = chan_wavelength.squeeze()
                 chan_wavelength = xr.DataArray(chan_wavelength, dims=['chan'])
-    
+
                 ds_mask = ds_.where(ds_.DATA_DESC_ID==ddid, other=0)
-    
+
                 uvw_chan_list.append(xr.concat([ds_mask.UVW[:,0] / chan_wavelength, ds_mask.UVW[:,1] / chan_wavelength], 'uv'))
 
             uv_sum = sum(uvw_chan_list)
@@ -548,7 +548,7 @@ def load_ms_file_splitspw(msfile, fieldid=None, datacolumn='DATA', method='physi
             ds_ind = ds_ind.unify_chunks()
 
             nrows+=len(ds_ind.newrow)
-            
+
             ds_bindex.append(ds_ind)
 
     print(f"\nProcessed {ndd} unique data description IDs comprising {nrows} rows.")
@@ -563,7 +563,7 @@ def load_ms_file_splitspw(msfile, fieldid=None, datacolumn='DATA', method='physi
 
 
 def write_ms_file(msfile, ds_ind, flag_ind_list, fieldid, stokes='I', overwrite=False, datacolumn="DATA", chunk_size=10**6, client=None):
-    """ Convert flags to the correct format and write flag column to a 
+    """ Convert flags to the correct format and write flag column to a
     measurement set (MS).
 
     Parameters

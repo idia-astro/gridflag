@@ -1,0 +1,13 @@
+name: gridflag
+channels:
+   - conda-forge
+   - pkgw-forge
+dependencies:
+   - python >= 3.6
+   - dask-ms[xarray]
+   - click
+   - numpy
+   - scipy
+   - astropy
+   - pip:
+      -requirements.txt
