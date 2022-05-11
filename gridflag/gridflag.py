@@ -19,25 +19,35 @@ import numba as nb
 from . import groupby_apply, groupby_partition, annulus_stats
 
 
-def process_stokes_options(ds_ind, stokes, use_existing_flags):
+def process_stokes_options(ds_ind, stokes='I', use_existing_flags=True):
     """
     Determine columns to use for flagging algorithm from DATA and FLAG tables.
+
+    Inputs:
+    ds_ind              The input dask dataframe
+    stokes              Which Stokes to flag on, str
+    use_existing_flags  Take into account existing flags in the MS, bool
+
+    Returns:
+    vals                Visibilities, dask dataframe
+    flags               Flags, dask dataframe
     """
 
     # Determine which polarization state to grid and flag
     if stokes=='I':
-        vals = (da.absolute(ds_ind.DATA[:,0].data + ds_ind.DATA[:,-1].data))
+        vals = ds_ind.DATA[:,0].data + ds_ind.DATA[:,-1].data
     elif stokes=='Q':
-        vals = (da.absolute(ds_ind.DATA[:,0].data - ds_ind.DATA[:,-1].data))
+        vals = ds_ind.DATA[:,0].data - ds_ind.DATA[:,-1].data
     elif stokes=='U':
-        vals = (da.real(ds_ind.DATA[:,1].data + ds_ind.DATA[:,2].data))
+        vals = ds_ind.DATA[:,1].data + ds_ind.DATA[:,2].data
     elif stokes=='V':
-        vals = (da.imag(ds_ind.DATA[:,1].data - ds_ind.DATA[:,2].data))
-    elif stokes=='A':
-        vals = da.absolute(ds_ind.DATA.data)
+        vals = ds_ind.DATA[:,1].data - ds_ind.DATA[:,2].data
     else:
         raise ValueError(f"compute_ipflag_grid: the stokes argument, '{stokes}', \
             is not currently implemented, please select another value.")
+
+    # Take only the real part for Gaussian stats
+    vals = vals.real
 
     if use_existing_flags:
         if stokes=='I':
@@ -48,9 +58,6 @@ def process_stokes_options(ds_ind, stokes, use_existing_flags):
             flags = ds_ind.FLAG.data[:,1] | ds_ind.FLAG.data[:,2]
         elif stokes=='V':
             flags = ds_ind.FLAG.data[:,1] | ds_ind.FLAG.data[:,2]
-        elif stokes=='A':
-            # Logical OR of all pol state columns
-            flags = da.sum(ds_ind.FLAG.data, axis=1, dtype=np.bool)
     else:
         flags = None
 
@@ -58,15 +65,7 @@ def process_stokes_options(ds_ind, stokes, use_existing_flags):
 
 
 
-def compute_ipflag_grid(
-    ds_ind, 
-    uvbins, 
-    sigma=3.0, 
-    partition_level=4, 
-    stokes='I',
-    use_existing_flags=True,
-    client=None
-):
+def compute_ipflag_grid(ds_ind, uvbins, sigma=3.0, partition_level=4, stokes='I', use_existing_flags=True, client=None):
     """    
     Map functions to a concurrent dask functions to an Xarray dataset with pre-
     computed grid indicies.
@@ -110,7 +109,7 @@ def compute_ipflag_grid(
     ubins = ds_ind.U_bins.data
     vbins = ds_ind.V_bins.data
 
-    vals, flags = process_stokes_options(ds_ind, stokes, True)
+    flags, vals = process_stokes_options(ds_ind, stokes, True)
 
     # The array 'p' is used to map flags back to the original file order
     p = da.arange(len(ds_ind.newrow), dtype=np.int64, chunks=ubins.chunks)

@@ -28,7 +28,26 @@ from astropy.time import Time
 
 import numba as nb
 
+import logging
+# Add colours for warnings and errors
+logging.addLevelName(
+    logging.WARNING, "\033[1;31m%s\033[1;0m" % logging.getLevelName(logging.WARNING))
+logging.addLevelName(
+    logging.ERROR, "\033[1;41m%s\033[1;0m" % logging.getLevelName(logging.ERROR))
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)-20s %(levelname)-8s %(message)s',
+    handlers=[
+        logging.FileHandler("plumber.log"),
+        logging.StreamHandler()
+    ]
+)
+
+logger = logging.getLogger()
+
 from .listobs_daskms import ListObs as listobs
+
 
 def compute_angular_resolution(uvw_chan):
     '''Compute the angular resolution as set by the psf / dirty beam.'''
@@ -141,7 +160,36 @@ def compute_uv_from_ms(msfile, fieldid, spw):
 
 
 
-def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddid=0, chunksize:int=10**7, bin_count_factor=1):
+def get_data_column(msfile, datacolumn, group_cols=['FIELD_ID']):
+    # FIXME
+    # This cascading logic is only because of the lack of easily configurable command line arguments at the moment.
+    # Ideally we would want the program to error out and die if the requested column doesn't exist, because unexpected things can happen otherwise.
+    # But in order to test gridflag inclusion in self-cal without modifying the existing script this logic is implemented
+    # Pre-selfcal the residual column won't exist, so it'll cascade down to DATA
+    # During selfcal the residual column _will_ exist (*should* exist) and we can flag on the residuals
+    # Dirty & hacky - fix ASAP.
+    if datacolumn == 'RESIDUAL':
+        try:
+            ms = xds_from_ms(msfile, columns=['CORRECTED_DATA', 'MODEL', 'UVW', 'FLAG'], group_cols=group_cols, table_keywords=True, column_keywords=True)
+            ms['RESIDUAL'] = ms['CORRECTED_DATA'] - ms['MODEL']
+        except RuntimeError:
+            logger.error("RESIDUAL column cannot be constructed - attempting to read CORRECTED_DATA column instead.")
+            try:
+                # Either corrected or model don't exist, but either way cannot construct RESIDUAL column. Complain, and use CORRECTED_DATA.
+                ms = xds_from_ms(msfile, columns=['CORRECTED_DATA', 'UVW', 'FLAG'], group_cols=group_cols, table_keywords=True, column_keywords=True)
+            except RuntimeError:
+                # CORRECTED_DATA doesn't exist, use DATA instead
+                logger.error("CORRECTED_DATA column does not exist. Falling back to DATA column - this may not be desired so please check your results carefully")
+                ms = xds_from_ms(msfile, columns=['DATA', 'UVW', 'FLAG'], group_cols=group_cols, table_keywords=True, column_keywords=True)
+    else:
+        # if datacolumn doesn't exist it'll error out
+        ms = xds_from_ms(msfile, columns=[datacolumn, 'UVW', 'FLAG'], group_cols=group_cols, table_keywords=True, column_keywords=True)
+
+    return ms
+
+
+
+def load_ms_file(msfile, fieldid=None, datacolumn='RESIDUAL', method='physical', ddid=0, chunksize:int=10**7, bin_count_factor=1):
     """
     Load selected data from the measurement set (MS) file and convert to xarray
     DataArrays. Transform data for analysis.
@@ -179,7 +227,7 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
     """
 
     # Load Metadata from the Measurement Set
-    msmd = listobs(msfile, datacolumn)
+    msmd = listobs(msfile, 'DATA')
 
     if fieldid==None:
         fields = msmd.get_fields(verbose=False)
@@ -190,15 +238,17 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
             list_fields(msmd)
             raise ValueError("Parameter, \'fieldid\', not set.")
 
+
     if not( (method=='statistical') or (method=='physical') ):
         raise ValueError('The \'method\' parameter should be either \'physical\' or \'statistical\'.')
+
 
     # Print uv-grid information to console
     title_string = "Compute UV bins"
     print(f"{title_string:^80}")
     print('_'*80)
 
-    ms = xds_from_ms(msfile, columns=[datacolumn, 'UVW', 'FLAG'], group_cols=['FIELD_ID'], table_keywords=True, column_keywords=True)
+    ms = get_data_column(msfile, datacolumn, group_cols=['FIELD_ID'])
 
     # Split the dataset and attributes
     try:
@@ -242,7 +292,6 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
 
     print(f"UV limit is {uvlimit[0][0]:.2f} - {uvlimit[0][1]:.2f}, {uvlimit[1][0]:.2f} - {uvlimit[1][1]:.2f}")
 
-
     if method=='statistical':
         std_k = [float(uval.reduce(np.std)),
                  float(vval.reduce(np.std))]
@@ -277,7 +326,8 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
               np.linspace( uvlimit[1][0], uvlimit[1][1], bincount[1] )]
 
     # Reload the Main table grouped by DATA_DESC_ID
-    ms = xds_from_ms(msfile, columns=[datacolumn, 'UVW', 'FLAG'], group_cols=['FIELD_ID', 'DATA_DESC_ID'], table_keywords=True, column_keywords=True)
+    ms = get_data_column(msfile, datacolumn, group_cols=['FIELD_ID', 'DATA_DESC_ID'])
+    #ms = xds_from_ms(msfile, columns=[datacolumn, 'UVW', 'FLAG'], group_cols=['FIELD_ID', 'DATA_DESC_ID'], table_keywords=True, column_keywords=True)
     ds_ms, ms_attrs = ms[0], ms[1:]
 
     dd = xds_from_table(f"{msfile}::DATA_DESCRIPTION")
@@ -294,28 +344,28 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
     print(f"\nField, Data ID, SPW ID, Channels")
 
     for ds_ in ds_ms:
-            fid = ds_.attrs['FIELD_ID']
-            ddid = ds_.attrs['DATA_DESC_ID']
+        fid = ds_.attrs['FIELD_ID']
+        ddid = ds_.attrs['DATA_DESC_ID']
 
-            if fid != fieldid:
-                print(f"Skipping channel: {fid}.")
-                continue
+        if fid != fieldid:
+            print(f"Skipping channel: {fid}.")
+            continue
 
-            spwid = int(dd.SPECTRAL_WINDOW_ID[ddid].data)
-            chan_freq = spw[0][spwid].CHAN_FREQ.data[0]
-            chan_wavelength = scipy.constants.c/chan_freq
+        spwid = int(dd.SPECTRAL_WINDOW_ID[ddid].data)
+        chan_freq = spw[0][spwid].CHAN_FREQ.data[0]
+        chan_wavelength = scipy.constants.c/chan_freq
 
 #             chan_wavelength = chan_wavelength.squeeze()
-            chan_wavelength = xr.DataArray(chan_wavelength, dims=['chan'])
+        chan_wavelength = xr.DataArray(chan_wavelength, dims=['chan'])
 
-            print(f"{fieldid:<5}  {ddid:<7}  {spwid:<6}  {len(chan_freq):<8}")
+        print(f"{fieldid:<5}  {ddid:<7}  {spwid:<6}  {len(chan_freq):<8}")
 
-            # I think we can remove the W channel part of this to save some compute (ds_.UVW[:,2])
-            uvw_chan = xr.concat([ds_.UVW[:,0] / chan_wavelength, ds_.UVW[:,1] / chan_wavelength, ds_.UVW[:,2] / chan_wavelength], 'uvw')
-            uvw_chan = uvw_chan.transpose('row', 'chan', 'uvw')
+        # I think we can remove the W channel part of this to save some compute (ds_.UVW[:,2])
+        uvw_chan = xr.concat([ds_.UVW[:,0] / chan_wavelength, ds_.UVW[:,1] / chan_wavelength, ds_.UVW[:,2] / chan_wavelength], 'uvw')
+        uvw_chan = uvw_chan.transpose('row', 'chan', 'uvw')
 
-            uval_dig = xr.apply_ufunc(da.digitize, uvw_chan[:,:,0], uvbins[0], dask='allowed', output_dtypes=[np.int32])
-            vval_dig = xr.apply_ufunc(da.digitize, uvw_chan[:,:,1], uvbins[1], dask='allowed', output_dtypes=[np.int32])
+        uval_dig = xr.apply_ufunc(da.digitize, uvw_chan[:,:,0], uvbins[0], dask='allowed', output_dtypes=[np.int32])
+        vval_dig = xr.apply_ufunc(da.digitize, uvw_chan[:,:,1], uvbins[1], dask='allowed', output_dtypes=[np.int32])
 
 #             ds_ind = xr.Dataset(data_vars = {'DATA': ds_[datacolumn], 'FLAG': ds_['FLAG'], 'UV': uvw_chan[:,:,:2]}, coords = {'U_bins': uval_dig.astype(np.int32), 'V_bins': vval_dig.astype(np.int32)})
 #
@@ -326,19 +376,19 @@ def load_ms_file(msfile, fieldid=None, datacolumn='DATA', method='physical', ddi
 #             ds_ind = ds_ind.chunk({'corr': 4, 'uvw': 2, 'newrow': chunksize})
 #             ds_ind = ds_ind.unify_chunks()
 
-            # Avoid calling xray.dataset.stack, as it leads to an intense multi-index shuffle
-            # that does not seem to be dask-backed and runs on the scheduler.
+        # Avoid calling xray.dataset.stack, as it leads to an intense multi-index shuffle
+        # that does not seem to be dask-backed and runs on the scheduler.
 
-            da_data = ds_[datacolumn].data.reshape(-1, ncorr)
-            da_flag = ds_.FLAG.data.reshape(-1, ncorr)
+        da_data = ds_[datacolumn].data.reshape(-1, ncorr)
+        da_flag = ds_.FLAG.data.reshape(-1, ncorr)
 
-            ds_ind = xr.Dataset(data_vars = {'DATA': (("newrow", "corr"), da_data), 'FLAG': (("newrow", "corr"), da_flag)}, coords = {'U_bins': (("newrow"), uval_dig.astype(np.int32).data.ravel()), 'V_bins': (("newrow"), vval_dig.astype(np.int32).data.ravel())})
-            ds_ind = ds_ind.chunk({'corr': ncorr, 'newrow': chunksize})
-            ds_ind = ds_ind.unify_chunks()
+        ds_ind = xr.Dataset(data_vars = {'DATA': (("newrow", "corr"), da_data), 'FLAG': (("newrow", "corr"), da_flag)}, coords = {'U_bins': (("newrow"), uval_dig.astype(np.int32).data.ravel()), 'V_bins': (("newrow"), vval_dig.astype(np.int32).data.ravel())})
+        ds_ind = ds_ind.chunk({'corr': ncorr, 'newrow': chunksize})
+        ds_ind = ds_ind.unify_chunks()
 
-            nrows+=len(ds_ind.newrow)
+        nrows+=len(ds_ind.newrow)
 
-            ds_bindex.append(ds_ind)
+        ds_bindex.append(ds_ind)
 
     print(f"\nProcessed {ndd} unique data description IDs comprising {nrows} rows.")
 

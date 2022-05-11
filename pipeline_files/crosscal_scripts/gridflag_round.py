@@ -47,7 +47,7 @@ def map_field_name_id(fieldname, msfile):
 
 def run_gridflag(visname, fields):
 
-    stokes = 'I'
+    stokes = 'Q'
     n_workers = 1
     username = os.environ["USER"]
 
@@ -66,7 +66,7 @@ def run_gridflag(visname, fields):
         local_directory="temp/",
         death_timeout="1m",
         log_directory="logs/",
-        project="b03-idia-ag",
+        project="b09-mightee-ag",
         python="singularity exec /idia/software/containers/gridflag_tools.simg /usr/bin/python3"
     )
 
@@ -81,26 +81,24 @@ def run_gridflag(visname, fields):
     fieldname = fields.targetfield
     fieldid = map_field_name_id(fieldname, visname)
 
-
     logger.info('Reading measurement set in dask-ms: {0}.'.format(visname))
 
     ds_ind, uvbins = compute_uv_bins.load_ms_file(visname, 
                                                   fieldid=fieldid, 
                                                   bin_count_factor=1.0, 
-                                                  chunksize=10**7
-                                                 )
+                                                  chunksize=2*10**7)
 
     logger.info('Flagging field {0} ({1}).'.format(fieldid, fieldname, visname))
     # Check existing flags in MS
     # check_exising_flags(ds_ind, stokes=stokes, client=client)
 
     flag_list, median_grid, median_grid_flg = gridflag.compute_ipflag_grid(ds_ind, 
-                                                                           uvbins, 
+                                                                           uvbins,
+                                                                           stokes = stokes,
                                                                            sigma=3.0, 
                                                                            partition_level=3, 
                                                                            stokes=stokes, 
-                                                                           client=client
-                                                                           )
+                                                                           client=client)
 
 
     flag_vis_percentage = 100*len(flag_list)/len(ds_ind.DATA)
