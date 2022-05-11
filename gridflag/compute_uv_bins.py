@@ -26,6 +26,24 @@ from daskms import xds_from_table, xds_from_ms, xds_to_table
 from astropy.coordinates import SkyCoord, EarthLocation
 from astropy.time import Time
 
+import logging
+
+# Add colours for warnings and errors
+logging.addLevelName(logging.WARNING, "\033[1;31m%s\033[1;0m" % logging.getLevelName(logging.WARNING))
+logging.addLevelName(logging.ERROR, "\033[1;41m%s\033[1;0m" % logging.getLevelName(logging.ERROR))
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)-20s %(levelname)-8s %(message)s',
+    handlers=[
+        logging.FileHandler("gridflag.log"),
+        logging.StreamHandler()
+    ]
+)
+
+logger = logging.getLogger()
+
+
 import numba as nb
 
 import logging
@@ -245,8 +263,8 @@ def load_ms_file(msfile, fieldid=None, datacolumn='RESIDUAL', method='physical',
 
     # Print uv-grid information to console
     title_string = "Compute UV bins"
-    print(f"{title_string:^80}")
-    print('_'*80)
+    logger.info(f"{title_string:^80}")
+    logger.info('_'*80)
 
     ms = get_data_column(msfile, datacolumn, group_cols=['FIELD_ID'])
 
@@ -266,7 +284,7 @@ def load_ms_file(msfile, fieldid=None, datacolumn='RESIDUAL', method='physical',
     ds_spw, spw_attrs = spw[0][0], spw[1]
 
     col_units = spw_attrs['CHAN_FREQ']['QuantumUnits'][0]
-    print(f"Selected column {spw_col} from {spw_table_name} with units {col_units}.")
+    logger.info(f"Selected column {spw_col} from {spw_table_name} with units {col_units}.")
 
     nchan = int(ds_spw.NUM_CHAN.data.compute()[0])
     nrow = len(ds_ms.ROWID)
@@ -276,7 +294,7 @@ def load_ms_file(msfile, fieldid=None, datacolumn='RESIDUAL', method='physical',
     if not len(relfile):
         relfile = os.path.basename(msfile.rstrip('/'))
 
-    print(f'Processing dataset {relfile} with {nchan} channels and {nrow} rows.')
+    logger.info(f'Processing dataset {relfile} with {nchan} channels and {nrow} rows.')
 
 #     maxuv = compute_uv_from_ms(msfile, fieldid, ds_spw)
 #     uvlimit = [0, maxuv],[0, maxuv]
@@ -290,14 +308,17 @@ def load_ms_file(msfile, fieldid=None, datacolumn='RESIDUAL', method='physical',
     # Compute the scaled limits of the UV grid by dividing the UV boundaries by the channel boundaries
     uvlimit = [bl_limits[0]/np.min(chan_wavelength_lim), bl_limits[1]/np.min(chan_wavelength_lim)], [bl_limits[2]/np.min(chan_wavelength_lim), bl_limits[3]/np.min(chan_wavelength_lim)]
 
-    print(f"UV limit is {uvlimit[0][0]:.2f} - {uvlimit[0][1]:.2f}, {uvlimit[1][0]:.2f} - {uvlimit[1][1]:.2f}")
+    logger.info(f"UV limit is {uvlimit[0][0]:.2f} - {uvlimit[0][1]:.2f}, {uvlimit[1][0]:.2f} - {uvlimit[1][1]:.2f}")
 
     if method=='statistical':
         std_k = [float(uval.reduce(np.std)),
                  float(vval.reduce(np.std))]
-        print(f"The calculated STD of the UV distribution is {std_k[0]} by {std_k[1]} lambda.")
+        logger.info(f"The calculated STD of the UV distribution is {std_k[0]} by {std_k[1]} lambda.")
 
         binwidth = [x * (3.5/n**(1./4)) for x in std_k]
+
+        logger.info(f"Using statistical estimation of bin widthds")
+        logger.info(f"The calculated UV bin width is {binwidth[0]} {binwidth[1]} lambda.")
 
         bincount = [int((uvlimit[0][1] - uvlimit[0][0])/binwidth[0]),
                     int((uvlimit[1][1] - uvlimit[1][0])/binwidth[1])]
@@ -316,11 +337,13 @@ def load_ms_file(msfile, fieldid=None, datacolumn='RESIDUAL', method='physical',
 
         binwidth = 1./fov
         binwidth = [int(binwidth), int(binwidth)]
-        print(f"The calculated FoV is {np.rad2deg(fov):.2f} deg.")
+
+        logger.info(f"Using physical estimation of bin widthds")
+        logger.info(f"The calculated FoV is {np.rad2deg(fov):.2f} deg.")
+        logger.info(f"The calculated UV bin width is {binwidth[0]} {binwidth[1]} lambda.")
 
         bincount = [int(bin_count_factor*(uvlimit[0][1] - uvlimit[0][0])/binwidth[0]),
                     int(bin_count_factor*(uvlimit[1][1] - uvlimit[1][0])/binwidth[1])]
-
 
     uvbins = [np.linspace( uvlimit[0][0], uvlimit[0][1], bincount[0] ),
               np.linspace( uvlimit[1][0], uvlimit[1][1], bincount[1] )]
@@ -339,17 +362,17 @@ def load_ms_file(msfile, fieldid=None, datacolumn='RESIDUAL', method='physical',
     # a different number of channels). The subsets will be stacked after the channel scaling.
     ds_bindex = []
 
-    print(f"Creating a UV-grid with ({bincount[0]}, {bincount[1]}) bins with bin size {binwidth[0]:.1f} by {binwidth[1]:.1f} lambda.")
+    logger.info(f"Creating a UV-grid with ({bincount[0]}, {bincount[1]}) bins with bin size {binwidth[0]:.1f} by {binwidth[1]:.1f} lambda.")
 
-    print(f"\nField, Data ID, SPW ID, Channels")
+    logger.info(f"\nField, Data ID, SPW ID, Channels")
 
     for ds_ in ds_ms:
         fid = ds_.attrs['FIELD_ID']
         ddid = ds_.attrs['DATA_DESC_ID']
 
-        if fid != fieldid:
-            print(f"Skipping channel: {fid}.")
-            continue
+            if fid != fieldid:
+                logger.info(f"Skipping channel: {fid}.")
+                continue
 
         spwid = int(dd.SPECTRAL_WINDOW_ID[ddid].data)
         chan_freq = spw[0][spwid].CHAN_FREQ.data[0]
@@ -358,7 +381,7 @@ def load_ms_file(msfile, fieldid=None, datacolumn='RESIDUAL', method='physical',
 #             chan_wavelength = chan_wavelength.squeeze()
         chan_wavelength = xr.DataArray(chan_wavelength, dims=['chan'])
 
-        print(f"{fieldid:<5}  {ddid:<7}  {spwid:<6}  {len(chan_freq):<8}")
+        logger.info(f"{fieldid:<5}  {ddid:<7}  {spwid:<6}  {len(chan_freq):<8}")
 
         # I think we can remove the W channel part of this to save some compute (ds_.UVW[:,2])
         uvw_chan = xr.concat([ds_.UVW[:,0] / chan_wavelength, ds_.UVW[:,1] / chan_wavelength, ds_.UVW[:,2] / chan_wavelength], 'uvw')
@@ -390,7 +413,7 @@ def load_ms_file(msfile, fieldid=None, datacolumn='RESIDUAL', method='physical',
 
         ds_bindex.append(ds_ind)
 
-    print(f"\nProcessed {ndd} unique data description IDs comprising {nrows} rows.")
+    logger.info(f"\nProcessed {ndd} unique data description IDs comprising {nrows} rows.")
 
     ds_ind = xr.concat(ds_bindex, dim="newrow")
     ds_ind.attrs = {'Measurement Set': msfile, 'Field': fieldid}
