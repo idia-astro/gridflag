@@ -192,16 +192,9 @@ def get_data_column(msfile, datacolumn, group_cols=['FIELD_ID']):
             ms['RESIDUAL'] = ms['CORRECTED_DATA'] - ms['MODEL']
         except RuntimeError:
             logger.error("RESIDUAL column cannot be constructed - attempting to read CORRECTED_DATA column instead.")
-            try:
-                # Either corrected or model don't exist, but either way cannot construct RESIDUAL column. Complain, and use CORRECTED_DATA.
-                ms = xds_from_ms(msfile, columns=['CORRECTED_DATA', 'UVW', 'FLAG'], group_cols=group_cols, table_keywords=True, column_keywords=True)
-            except RuntimeError:
-                # CORRECTED_DATA doesn't exist, use DATA instead
-                logger.error("CORRECTED_DATA column does not exist. Falling back to DATA column - this may not be desired so please check your results carefully")
-                ms = xds_from_ms(msfile, columns=['DATA', 'UVW', 'FLAG'], group_cols=group_cols, table_keywords=True, column_keywords=True)
-    else:
-        # if datacolumn doesn't exist it'll error out
-        ms = xds_from_ms(msfile, columns=[datacolumn, 'UVW', 'FLAG'], group_cols=group_cols, table_keywords=True, column_keywords=True)
+
+    # Data column is not residual, so just read the regular column
+    ms = xds_from_ms(msfile, columns=[datacolumn, 'UVW', 'FLAG'], group_cols=group_cols, table_keywords=True, column_keywords=True)
 
     return ms
 
