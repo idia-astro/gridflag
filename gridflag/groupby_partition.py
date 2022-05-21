@@ -305,17 +305,18 @@ def combine_annulus_results(median_grid_chunks, count_grid_chunks, flag_list_chu
 
 
 
-@nb.njit(
-    nb.types.Tuple(
-        (nb.int32, nb.int32[::1], nb.int32[::1], nb.float32[:], nb.boolean[::1], nb.int64[::1])
-    )(nb.int32[::1], nb.int32[::1], nb.float32[:], nb.boolean[::1], nb.int64[::1], nb.float64),
-    locals={
-        "i": nb.uint32,
-        "j": nb.uint32,
-        "v_tmp": nb.float32[::1]
-    },
-    nogil=True
-)
+#@nb.njit(
+#    nb.types.Tuple(
+#        (nb.int32, nb.int32[::1], nb.int32[::1], nb.float32[:], nb.boolean[::1], nb.int64[::1])
+#    )(nb.int32[::1], nb.int32[::1], nb.float32[:], nb.boolean[::1], nb.int64[::1], nb.float64),
+#    locals={
+#        "i": nb.uint32,
+#        "j": nb.uint32,
+#        "v_tmp": nb.float32[::1]
+#    },
+#    nogil=True
+#)
+@nb.njit(nogil=True, cache=True)
 def partition_permutation(a, b, v, f, p, pivot):
     ''' Apply a partition to the first input array using the pivot point, p and 
     sort all the input arrays according to this partial sort.

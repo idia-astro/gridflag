@@ -193,8 +193,9 @@ def get_data_column(msfile, datacolumn, group_cols=['FIELD_ID']):
         except RuntimeError:
             logger.error("RESIDUAL column cannot be constructed - attempting to read CORRECTED_DATA column instead.")
 
-    # Data column is not residual, so just read the regular column
-    ms = xds_from_ms(msfile, columns=[datacolumn, 'UVW', 'FLAG'], group_cols=group_cols, table_keywords=True, column_keywords=True)
+    else:
+        # Data column is not residual, so just read the regular column
+        ms = xds_from_ms(msfile, columns=[datacolumn, 'UVW', 'FLAG'], group_cols=group_cols, table_keywords=True, column_keywords=True)
 
     return ms
 
@@ -363,9 +364,9 @@ def load_ms_file(msfile, fieldid=None, datacolumn='RESIDUAL', method='physical',
         fid = ds_.attrs['FIELD_ID']
         ddid = ds_.attrs['DATA_DESC_ID']
 
-            if fid != fieldid:
-                logger.info(f"Skipping channel: {fid}.")
-                continue
+        if fid != fieldid:
+            logger.info(f"Skipping channel: {fid}.")
+            continue
 
         spwid = int(dd.SPECTRAL_WINDOW_ID[ddid].data)
         chan_freq = spw[0][spwid].CHAN_FREQ.data[0]

@@ -18,6 +18,23 @@ import numba as nb
 
 from . import groupby_apply, groupby_partition, annulus_stats
 
+import logging
+
+# Add colours for warnings and errors
+logging.addLevelName(logging.WARNING, "\033[1;31m%s\033[1;0m" % logging.getLevelName(logging.WARNING))
+logging.addLevelName(logging.ERROR, "\033[1;41m%s\033[1;0m" % logging.getLevelName(logging.ERROR))
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)-20s %(levelname)-8s %(message)s',
+    handlers=[
+        logging.FileHandler("gridflag.log"),
+        logging.StreamHandler()
+    ]
+)
+
+logger = logging.getLogger()
+
 
 def process_stokes_options(ds_ind, stokes='I', use_existing_flags=True):
     """
@@ -116,7 +133,7 @@ def compute_ipflag_grid(ds_ind, uvbins, sigma=3.0, partition_level=4, stokes='I'
 
     chunks = list(ubins.chunks[0])
 
-    print(f"Original chunk sizes: ", chunks)
+    logger.debug(f"Original chunk sizes: ", chunks)
 
     # Execute partition function which does a partial sort on U and V bins
     split_points, ubins_part, vbins_part, vals_part, flags_part, p_part = dask_partition_sort(
